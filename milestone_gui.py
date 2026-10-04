@@ -58,16 +58,19 @@ class App:
 
         cfg = E.load_config()
         self.s = {k: tk.StringVar(value=str(cfg[k])) for k in
-                  ("webhook", "digest_webhook", "game_folder", "milestones", "max_level", "tiers", "level_msg", "welcome_msg")}
+                  ("webhook", "digest_webhook", "game_folder", "milestones", "max_level", "tiers", "level_msg", "welcome_msg",
+                   "shared_url", "shared_token", "my_name")}
         self.b = {k: tk.BooleanVar(value=bool(cfg[k])) for k in
-                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled")}
+                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled", "shared_on")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
+        self.device_id, self.engine = cfg["device_id"], None
 
         self.header()
         nb = ttk.Notebook(root)
         nb.pack(fill="both", expand=True, padx=18, pady=(4, 16))
         for title, build in (("  Setup  ", self.tab_setup), ("  Announcements  ", self.tab_announce),
-                             ("  Weekly digest  ", self.tab_digest), ("  Activity  ", self.tab_log)):
+                             ("  Weekly digest  ", self.tab_digest), ("  Shared mode  ", self.tab_shared),
+                             ("  Activity  ", self.tab_log)):
             page = ttk.Frame(nb, padding=18)
             nb.add(page, text=title)
             build(page)
@@ -172,6 +175,23 @@ class App:
         ttk.Button(p, text="Post / refresh the digest now", command=self.digest_now).pack(anchor="w", pady=(22, 0))
         ttk.Label(p, style="Muted.TLabel", text="Handy for testing. It needs the addon file from step 2 on the Setup tab.").pack(anchor="w", pady=(6, 0))
 
+    def tab_shared(self, p):
+        p.columnconfigure(0, weight=1)
+        ttk.Checkbutton(p, text="Use shared mode (for when more than one officer runs this app)",
+                        variable=self.b["shared_on"]).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(p, style="Muted.TLabel", wraplength=700, justify="left",
+                  text="Everyone's app checks in with one shared online notebook. Only one app announces at a time "
+                       "(the Announcer), the others stand by, and if the Announcer goes offline or keeps failing, "
+                       "another officer takes over automatically. Leave this off if you're the only one running it."
+                  ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.entry_row(p, "Web address of the shared service", self.s["shared_url"],
+                       "The guild leader gives you this. It starts with https://script.google.com/", row=2)
+        self.entry_row(p, "Password", self.s["shared_token"],
+                       "Also from the guild leader. Keep it inside the officer group.", row=5)
+        self.entry_row(p, "Your name", self.s["my_name"],
+                       "Shown to the other officers, like \"Mikoya is announcing\".", row=8,
+                       buttons=[("Test connection", self.test_shared)])
+
     def tab_log(self, p):
         self.box = textbox(p, 10)
         self.box.configure(state="disabled")
@@ -200,25 +220,45 @@ class App:
     def set_running(self, on):
         self.running = on
         self.go.configure(text="Stop" if on else "Start watching", style="Stop.TButton" if on else "Go.TButton")
-        self.status.configure(text="●  Watching your guild" if on else "●  Not running",
-                              foreground=GOOD if on else MUTED)
+        if on and self.b["shared_on"].get():
+            self.status.configure(text="●  Connecting to the shared service...", foreground=MUTED)
+        else:
+            self.status.configure(text="●  Watching your guild" if on else "●  Not running",
+                                  foreground=GOOD if on else MUTED)
+
+    def set_status(self, kind, text):
+        if not self.running:
+            return
+        label = {"announcer": "●  Announcer: you're posting for the guild",
+                 "standby": "●  " + text.rstrip("."),
+                 "offline": "●  Can't reach the shared service, staying quiet"}.get(kind, "●  " + text)
+        color = {"announcer": GOOD, "standby": AMBER, "offline": BAD}.get(kind, MUTED)
+        self.status.configure(text=label, foreground=color)
+
+    def engine_status(self, kind, text):
+        self.q.put(lambda: self.set_status(kind, text))
 
     def collect(self):
         c = {k: v.get().strip() for k, v in self.s.items()}
         c.update({k: v.get() for k, v in self.b.items()})
         c["tips"] = self.tips.get("1.0", "end").strip()
         c["savedvars"] = ""
+        c["device_id"] = self.device_id
         c["week_start"] = E.WEEKDAYS.index(self.week.get())
         return c
 
     def problem(self, c, need_file=True):
         if not c["webhook"].startswith("https://"):
             return "Paste your Discord webhook URL in step 1 on the Setup tab."
-        if not os.path.isdir(c["game_folder"]):
-            return "Pick your game folder in step 2 (the one that contains Interface and WTF)."
-        if need_file and not E.resolve_savedvars(c):
-            return ("I can't see the addon's file yet.\nInstall the addon (button on the Setup tab), then in the game "
-                    "type /reload followed by /gms save.")
+        if c["shared_on"]:
+            if not c["shared_url"].startswith("https://") or not c["shared_token"]:
+                return "Shared mode is on, so fill in the web address and password on the Shared mode tab (or turn it off)."
+        else:
+            if not os.path.isdir(c["game_folder"]):
+                return "Pick your game folder in step 2 (the one that contains Interface and WTF)."
+            if need_file and not E.resolve_savedvars(c):
+                return ("I can't see the addon's file yet.\nInstall the addon (button on the Setup tab), then in the game "
+                        "type /reload followed by /gms save.")
         if not c["max_level"].isdigit():
             return "Max level should be a number."
         if not E.nums(c["milestones"]):
@@ -282,6 +322,22 @@ class App:
             self.log(msg + (" In the game, type /reload to load it." if ok else ""))
             self.refresh_addon()
 
+    def test_shared(self):
+        c = self.collect()
+        E.save_config(c)
+        if not c["shared_url"].startswith("https://") or not c["shared_token"]:
+            return messagebox.showwarning("Fill these in first", "Add the web address and the password first.")
+        def run():
+            ok, res, err = E.SharedStore(c["shared_url"], c["shared_token"], c["device_id"], c["my_name"]).status()
+            if not ok:
+                self.q.put(lambda: messagebox.showwarning("Couldn't connect", f"That didn't work: {err}"))
+                return
+            who = res.get("leaderName") or "nobody right now"
+            text = f"Connected!\n\nCurrent announcer: {who}\nMembers in the shared snapshot: {res.get('members', 0)}"
+            self.q.put(lambda: messagebox.showinfo("Shared mode", text))
+            self.log(f"Shared service reached. Announcer right now: {who}.")
+        threading.Thread(target=run, daemon=True).start()
+
     def test(self):
         c = self.collect()
         E.save_config(c)
@@ -300,10 +356,15 @@ class App:
         if msg:
             return messagebox.showwarning("One thing first", msg)
         def run():
+            eng = E.Engine(c, self.log)
             try:
-                E.Engine(c, self.log).check(force_digest=True)
+                eng.check(force_digest=True)
+                if eng.shared and eng.role == "standby":
+                    self.log("Only the Announcer can post the digest. Ask them, or wait for the role to move.")
             except Exception as e:
                 self.log(f"Digest problem: {e}")
+            if eng.shared and not self.running:
+                eng.release()
         threading.Thread(target=run, daemon=True).start()
 
     def check_update(self, manual):
@@ -330,7 +391,9 @@ class App:
         if getattr(sys, "frozen", False):
             return messagebox.showinfo("Use the .pyw version", "The .exe can't update itself.\nOpen GuildMilestones.pyw instead, "
                                        "and updating becomes one click.")
-        if not messagebox.askyesno("Update", f"Update to v{self.latest}?\n\nThe app will restart. Your settings are kept."):
+        notes = E.latest_notes(self.latest)
+        extra = ("\n\nWhat's new:\n" + (notes[:700] + ("..." if len(notes) > 700 else ""))) if notes else ""
+        if not messagebox.askyesno("Update", f"Update to v{self.latest}?\n\nThe app will restart. Your settings are kept.{extra}"):
             return
         self.upd.state(["disabled"])
         self.log("Downloading the update...")
@@ -361,7 +424,8 @@ class App:
             return
         self.maybe_update_addon()
         self.stop = threading.Event()
-        threading.Thread(target=E.Engine(c, self.log).run, args=(self.stop,), daemon=True).start()
+        self.engine = E.Engine(c, self.log, status=self.engine_status)
+        threading.Thread(target=self.engine.run, args=(self.stop,), daemon=True).start()
         self.set_running(True)
 
     def halt(self):
@@ -374,7 +438,12 @@ class App:
             E.save_config(self.collect())
         except Exception:
             pass
+        eng = self.engine
         self.halt()
+        if eng and eng.shared:                                   # hand over the announcer role before closing
+            t = threading.Thread(target=eng.release, daemon=True)
+            t.start()
+            t.join(4)
         self.root.destroy()
 
 

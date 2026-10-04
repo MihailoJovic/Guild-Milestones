@@ -19,6 +19,10 @@ It has two parts:
 Download the ZIP again, unzip over the old folder (replace files), and open the app.
 Your settings live in `%APPDATA%\GuildMilestones`, so nothing is lost.
 
+## Shared mode (several officers)
+If more than one officer runs the app, turn on **Shared mode** so only one announces at a time and they all share one memory.
+The guild leader sets it up once: see [`shared/SETUP.md`](shared/SETUP.md). What changed in each version is in [`CHANGES.md`](CHANGES.md).
+
 ## Privacy
 Your webhook URL is stored only on your own computer, in `%APPDATA%\GuildMilestones\settings.json`.
 It is never part of this repo. Never paste a webhook URL into an issue or a commit.
