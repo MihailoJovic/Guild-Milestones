@@ -1,11 +1,12 @@
 """Guild Milestones engine: reads the addon's file, decides what to announce, talks to Discord.
 No window code in here, so it can be tested on its own."""
-import copy, glob, hashlib, json, os, re, shutil, sys, threading, time, urllib.error, urllib.request
+import copy, glob, hashlib, io, json, os, re, shutil, sys, tempfile, threading, time, urllib.error, urllib.request, zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
+REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
 DATA_DIR = Path(os.environ.get("APPDATA") or (Path.home() / ".config")) / "GuildMilestones"
@@ -486,3 +487,75 @@ def install_addon(game):
                        "'Run as administrator' once, and try again.")
     except Exception as e:
         return False, f"Couldn't install the addon: {e}"
+
+
+# ------------------------------- updating from GitHub -------------------------------
+UPDATE_FILES = ("engine.py", "milestone_gui.py", "GuildMilestones.pyw", "README.md", "HOW TO UPDATE.txt", "build_exe.bat")
+
+
+def _fetch(url, timeout=25):
+    req = urllib.request.Request(url, headers={"User-Agent": "GuildMilestones/" + APP_VERSION})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _ver(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+def latest_version():
+    """Reads APP_VERSION out of engine.py on GitHub. Returns a string or None."""
+    raw = _fetch(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/engine.py").decode("utf-8", "replace")
+    m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', raw)
+    return m.group(1) if m else None
+
+
+def update_available():
+    """(latest version, True if it is newer than this one)"""
+    latest = latest_version()
+    return latest, bool(latest) and _ver(latest) > _ver(APP_VERSION)
+
+
+def apply_update(zip_bytes=None):
+    """Download the repo as a zip, check the new code compiles, then copy it over this app.
+    Returns (ok, message). The caller restarts the app afterwards."""
+    if getattr(sys, "frozen", False):
+        return False, "This is the .exe version, which can't update itself. Use GuildMilestones.pyw instead."
+    try:
+        data = zip_bytes or _fetch(f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip", timeout=60)
+        with tempfile.TemporaryDirectory() as tmp:
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                root = z.namelist()[0].split("/")[0]
+                for name in z.namelist():
+                    rel = name[len(root) + 1:]
+                    if not rel or name.endswith("/"):
+                        continue
+                    if ".." in rel.split("/") or not (rel in UPDATE_FILES or rel.startswith("GuildMilestones/")):
+                        continue
+                    dest = Path(tmp) / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(z.read(name))
+            stage = Path(tmp)
+            for need in ("engine.py", "milestone_gui.py", "GuildMilestones.pyw", "GuildMilestones/GuildMilestones.toc"):
+                if not (stage / need).exists():
+                    return False, f"The download is missing {need}, so I left everything as it was."
+            for py in ("engine.py", "milestone_gui.py", "GuildMilestones.pyw"):
+                compile((stage / py).read_text(encoding="utf-8"), py, "exec")      # refuse a broken upload
+            backup = DATA_DIR / "backup"
+            backup.mkdir(parents=True, exist_ok=True)
+            for f in UPDATE_FILES:
+                if (APP_DIR / f).exists():
+                    shutil.copy2(APP_DIR / f, backup / f)
+                if (stage / f).exists():
+                    shutil.copy2(stage / f, APP_DIR / f)
+            target = APP_DIR / "GuildMilestones"
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(stage / "GuildMilestones", target)
+        return True, "Update downloaded."
+    except PermissionError:
+        return False, "Windows wouldn't let me change the app's folder. Move the app to somewhere like Documents and try again."
+    except SyntaxError as e:
+        return False, f"The new code has a mistake in it ({e.msg}), so I left everything as it was."
+    except Exception as e:
+        return False, f"Couldn't update: {e}"

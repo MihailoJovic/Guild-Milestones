@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Guild Milestones - companion app. Double-click to run (or build the .exe with build_exe.bat)."""
-import os, queue, threading, time
+import os, queue, subprocess, sys, threading, time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -50,7 +50,7 @@ def textbox(parent, height):
 
 class App:
     def __init__(self, root):
-        self.root, self.q, self.stop, self.running = root, queue.Queue(), None, False
+        self.root, self.q, self.stop, self.running, self.latest = root, queue.Queue(), None, False, None
         root.title(f"Guild Milestones {E.APP_VERSION}")
         root.geometry("860x700")
         root.minsize(780, 640)
@@ -78,6 +78,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.pump()
         self.set_running(False)
+        root.after(2000, lambda: self.check_update(False))
         if cfg["auto_start"] and cfg["webhook"] and os.path.isdir(cfg["game_folder"]):
             root.after(600, lambda: self.start(quiet=True))
 
@@ -92,6 +93,7 @@ class App:
         self.status.pack(anchor="w", pady=(2, 0))
         self.go = ttk.Button(bar, text="Start watching", style="Go.TButton", command=self.toggle)
         self.go.pack(side="right")
+        self.upd = ttk.Button(bar, text="", command=self.do_update)      # shown only when an update exists
 
     def entry_row(self, parent, label, var, hint=None, row=0, buttons=()):
         ttk.Label(parent, text=label, style="Section.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
@@ -122,6 +124,10 @@ class App:
                         variable=self.b["auto_start"]).grid(row=10, column=0, columnspan=3, sticky="w", pady=(20, 0))
         ttk.Checkbutton(p, text="Keep the addon up to date for me when this app updates",
                         variable=self.b["auto_update_addon"]).grid(row=11, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(p, text=f"This app is version {E.APP_VERSION}", style="Muted.TLabel").grid(
+            row=12, column=0, sticky="w", pady=(22, 0))
+        ttk.Button(p, text="Check for updates", command=lambda: self.check_update(True)).grid(
+            row=12, column=1, columnspan=2, sticky="e", padx=(8, 0), pady=(22, 0))
 
     def tab_announce(self, p):
         p.columnconfigure(0, weight=1, uniform="c")
@@ -180,6 +186,9 @@ class App:
         try:
             while True:
                 line = self.q.get_nowait()
+                if callable(line):
+                    line()
+                    continue
                 self.box.configure(state="normal")
                 self.box.insert("end", line)
                 self.box.see("end")
@@ -296,6 +305,48 @@ class App:
             except Exception as e:
                 self.log(f"Digest problem: {e}")
         threading.Thread(target=run, daemon=True).start()
+
+    def check_update(self, manual):
+        def work():
+            try:
+                latest, newer = E.update_available()
+            except Exception as e:
+                if manual:
+                    self.q.put(lambda err=e: messagebox.showwarning("Couldn't check", f"I couldn't reach GitHub.\n\n{err}"))
+                return
+            if newer:
+                self.q.put(lambda: self.show_update(latest))
+            elif manual:
+                self.q.put(lambda: messagebox.showinfo("Up to date", f"You're on the latest version ({E.APP_VERSION})."))
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_update(self, latest):
+        self.latest = latest
+        self.upd.configure(text=f"Update to v{latest}")
+        self.upd.pack(side="right", padx=(0, 12))
+        self.log(f"A new version is available: v{latest}. Click the Update button at the top.")
+
+    def do_update(self):
+        if getattr(sys, "frozen", False):
+            return messagebox.showinfo("Use the .pyw version", "The .exe can't update itself.\nOpen GuildMilestones.pyw instead, "
+                                       "and updating becomes one click.")
+        if not messagebox.askyesno("Update", f"Update to v{self.latest}?\n\nThe app will restart. Your settings are kept."):
+            return
+        self.upd.state(["disabled"])
+        self.log("Downloading the update...")
+        def work():
+            ok, msg = E.apply_update()
+            self.q.put(lambda: self.update_done(ok, msg))
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_done(self, ok, msg):
+        if not ok:
+            self.upd.state(["!disabled"])
+            self.log(msg)
+            return messagebox.showwarning("Update failed", msg)
+        self.log("Updated! Restarting...")
+        subprocess.Popen([sys.executable, str(E.APP_DIR / "GuildMilestones.pyw")], cwd=str(E.APP_DIR))
+        self.close()
 
     def toggle(self):
         self.halt() if self.running else self.start()

@@ -1,0 +1,7 @@
+## Interface: 16001, 120100
+## Title: Guild Milestones
+## Notes: Keeps a snapshot of your guild (levels, classes, professions) for the Guild Milestones companion app.
+## Version: 0.3.0
+## SavedVariables: GuildMilestonesDB
+
+GuildMilestones.lua
