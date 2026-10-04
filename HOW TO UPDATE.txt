@@ -12,3 +12,8 @@ Click it. The app downloads the update, restarts, and refreshes the addon in you
 Then type /reload in the game.
 
 Your settings and the app's memory live in %APPDATA%\GuildMilestones, so updating never wipes them.
+
+ONE APP, ONE FOLDER
+Keep only ONE copy of the app. To see which folder your desktop shortcut uses, right-click the shortcut
+and choose Properties, then Open File Location. (The Setup tab also shows the folder it runs from.)
+If an update ever fails, unzip the newest kit into that same folder and choose "Replace the files".

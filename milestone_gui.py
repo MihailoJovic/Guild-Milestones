@@ -65,6 +65,7 @@ class App:
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
         self.device_id, self.engine = cfg["device_id"], None
 
+        root.report_callback_exception = self.on_ui_error
         self.header()
         nb = ttk.Notebook(root)
         nb.pack(fill="both", expand=True, padx=18, pady=(4, 16))
@@ -131,6 +132,10 @@ class App:
             row=12, column=0, sticky="w", pady=(22, 0))
         ttk.Button(p, text="Check for updates", command=lambda: self.check_update(True)).grid(
             row=12, column=1, columnspan=2, sticky="e", padx=(8, 0), pady=(22, 0))
+        self.upd_lbl = ttk.Label(p, text="Not checked yet.", style="Muted.TLabel", wraplength=640, justify="left")
+        self.upd_lbl.grid(row=13, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(p, text=f"This copy of the app runs from: {E.APP_DIR}", style="Muted.TLabel",
+                  wraplength=640, justify="left").grid(row=14, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
     def tab_announce(self, p):
         p.columnconfigure(0, weight=1, uniform="c")
@@ -199,6 +204,10 @@ class App:
         p.pack_propagate(True)
 
     # ---------- plumbing ----------
+    def on_ui_error(self, exc, val, tb):
+        E.log_error(f"UI error: {val!r}")
+        self.log(f"Something went wrong: {val}")
+
     def log(self, text):
         self.q.put(f"{time.strftime('%H:%M:%S')}   {text}\n")
 
@@ -207,7 +216,11 @@ class App:
             while True:
                 line = self.q.get_nowait()
                 if callable(line):
-                    line()
+                    try:
+                        line()
+                    except Exception as e:
+                        E.log_error(f"UI callback failed: {e!r}")
+                        self.log(f"Something went wrong in the window: {e}")
                     continue
                 self.box.configure(state="normal")
                 self.box.insert("end", line)
@@ -368,17 +381,17 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def check_update(self, manual):
+        if manual:
+            self.upd_lbl.configure(text="Checking GitHub...")
         def work():
-            try:
-                latest, newer = E.update_available()
-            except Exception as e:
-                if manual:
-                    self.q.put(lambda err=e: messagebox.showwarning("Couldn't check", f"I couldn't reach GitHub.\n\n{err}"))
-                return
-            if newer:
-                self.q.put(lambda: self.show_update(latest))
+            rep = E.check_report()
+            stamp = time.strftime("%H:%M")
+            self.q.put(lambda: self.upd_lbl.configure(text=f"Checked at {stamp}. {rep['text']}"))
+            if rep["newer"]:
+                self.q.put(lambda: self.show_update(rep["latest"]))
             elif manual:
-                self.q.put(lambda: messagebox.showinfo("Up to date", f"You're on the latest version ({E.APP_VERSION})."))
+                title = "Up to date" if rep["ok"] else "Couldn't check"
+                self.q.put(lambda: messagebox.showinfo(title, rep["text"]))
         threading.Thread(target=work, daemon=True).start()
 
     def show_update(self, latest):
@@ -448,6 +461,7 @@ class App:
 
 
 def main():
+    threading.excepthook = lambda a: E.log_error(f"thread {a.thread.name if a.thread else '?'} crashed: {a.exc_value!r}")
     root = tk.Tk()
     App(root)
     root.mainloop()

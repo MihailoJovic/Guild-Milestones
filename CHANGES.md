@@ -1,5 +1,12 @@
 # What's new
 
+## v0.5.1
+**Updates are easier to trust and easier to troubleshoot.**
+- **Check for updates** now always tells you what it found, right on the Setup tab: the version on GitHub, the version you have, and when it checked. No more silence.
+- The check skips GitHub's cache, so a new version shows up straight away instead of after a few minutes, and it has a backup route if the first one is blocked.
+- The Setup tab shows which folder this copy of the app runs from, so you can tell which copy you're looking at.
+- Problems are written to `%APPDATA%\GuildMilestones\error.log` instead of disappearing, and a broken window callback no longer freezes the app's background work.
+
 ## v0.5.0
 **Shared mode: several officers can run the app without double posts.**
 - New **Shared mode** tab. Everyone's app checks in with one small online notebook (a free Google Apps Script the guild leader sets up once, see `shared/SETUP.md`).

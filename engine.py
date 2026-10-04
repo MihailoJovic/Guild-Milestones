@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -678,9 +678,24 @@ UPDATE_DIRS = ("GuildMilestones", "shared")
 
 
 def _fetch(url, timeout=25):
-    req = urllib.request.Request(url, headers={"User-Agent": "GuildMilestones/" + APP_VERSION})
+    req = urllib.request.Request(url, headers={"User-Agent": "GuildMilestones/" + APP_VERSION,
+                                               "Cache-Control": "no-cache"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+
+def _fresh(url):
+    """GitHub's raw files are cached for ~5 minutes. A unique query string skips that cache."""
+    return url + ("&" if "?" in url else "?") + f"cb={int(time.time())}"
+
+
+def log_error(text):
+    """Write problems to a file, because the app has no console to show them in."""
+    try:
+        with open(DATA_DIR / "error.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {text}\n")
+    except Exception:
+        pass
 
 
 def _ver(v):
@@ -688,16 +703,28 @@ def _ver(v):
 
 
 def latest_version():
-    """Reads APP_VERSION out of engine.py on GitHub. Returns a string or None."""
-    raw = _fetch(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/engine.py").decode("utf-8", "replace")
-    m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', raw)
-    return m.group(1) if m else None
+    """Reads APP_VERSION out of engine.py on GitHub. Returns (version or None, where it was read from)."""
+    pat = r'APP_VERSION\s*=\s*"([^"]+)"'
+    err = None
+    try:
+        raw = _fetch(_fresh(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/engine.py")).decode("utf-8", "replace")
+        m = re.search(pat, raw)
+        return (m.group(1) if m else None), "raw"
+    except Exception as e:
+        err = e
+    try:                                              # second route, in case the first one is blocked
+        import base64
+        meta = json.loads(_fetch(_fresh(f"https://api.github.com/repos/{REPO}/contents/engine.py?ref={BRANCH}")))
+        m = re.search(pat, base64.b64decode(meta["content"]).decode("utf-8", "replace"))
+        return (m.group(1) if m else None), "api"
+    except Exception:
+        raise err
 
 
 def latest_notes(version):
     """The 'what's new' text for a version, taken from CHANGES.md on GitHub (or '')."""
     try:
-        raw = _fetch(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/CHANGES.md").decode("utf-8", "replace")
+        raw = _fetch(_fresh(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/CHANGES.md")).decode("utf-8", "replace")
         m = re.search(r"^##\s*v?%s\b[^\n]*\n(.*?)(?=^##\s|\Z)" % re.escape(version), raw, re.S | re.M)
         return m.group(1).strip() if m else ""
     except Exception:
@@ -706,8 +733,27 @@ def latest_notes(version):
 
 def update_available():
     """(latest version, True if it is newer than this one)"""
-    latest = latest_version()
+    latest, _ = latest_version()
     return latest, bool(latest) and _ver(latest) > _ver(APP_VERSION)
+
+
+def check_report():
+    """Plain-English result of an update check, for the Setup tab."""
+    try:
+        latest, _ = latest_version()
+    except Exception as e:
+        log_error(f"update check failed: {e!r}")
+        return {"ok": False, "newer": False, "latest": None, "text": f"Couldn't reach GitHub ({e})."}
+    if not latest:
+        return {"ok": False, "newer": False, "latest": None,
+                "text": "GitHub answered, but I couldn't find a version number in engine.py there."}
+    newer = _ver(latest) > _ver(APP_VERSION)
+    if newer:
+        text = f"GitHub has v{latest}; this app is v{APP_VERSION}. An update is available."
+    else:
+        text = (f"GitHub's engine.py says v{latest}, and this app is v{APP_VERSION}, so you're up to date. "
+                "If you uploaded a newer version, check that engine.py itself was replaced on GitHub.")
+    return {"ok": True, "newer": newer, "latest": latest, "text": text}
 
 
 def apply_update(zip_bytes=None):
