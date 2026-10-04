@@ -1,0 +1,14 @@
+FIRST TIME
+1. Install Python from python.org (tick "Add python.exe to PATH").
+2. Unzip this kit into a folder you'll keep, e.g. Documents\GuildMilestones-app
+3. Double-click GuildMilestones.pyw. (Right-click it > Send to > Desktop for a shortcut.)
+4. Setup tab: paste your webhook, pick your game folder, click "Install / update addon".
+5. In the game type /reload.
+
+UPDATING LATER (about 30 seconds)
+1. Unzip the new kit into the SAME folder and choose "Replace the files".
+2. Double-click GuildMilestones.pyw. The app updates the addon in your game folder for you.
+3. In the game type /reload.
+
+Your settings and the app's memory live in %APPDATA%\GuildMilestones, so replacing or
+deleting the app folder never wipes them.
