@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.1"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -433,6 +433,19 @@ def build_digest(st, cfg):
             line += f" · +{len(rows) - 8} more"
         fields.append({"name": f"🧰 {prof} ({len(rows)})", "value": line[:300], "inline": True})
 
+    def size(fs):
+        return sum(len(f["name"]) + len(f["value"]) for f in fs) + 200
+    while size(fields) > 5600 and len(fields) > 3:       # Discord rejects embeds over 6000 characters
+        for i in range(len(fields) - 1, -1, -1):
+            if fields[i]["name"].startswith("🧰"):
+                fields.pop(i)
+                break
+        else:
+            fields.pop()
+    for f in fields:
+        if not f["value"].strip():
+            f["value"] = "-"
+
     return {
         "title": f"📅 Guild Weekly · week of {start.strftime('%b')} {start.day}",
         "description": "This post updates itself as the week goes on.",
@@ -453,7 +466,12 @@ def _request(method, url, payload=None, timeout=15):
             body = r.read().decode("utf-8")
             return r.status, (json.loads(body) if body else None), ""
     except urllib.error.HTTPError as e:
-        return e.code, None, f"Discord said HTTP {e.code}"
+        detail = ""
+        try:
+            detail = " - " + str(json.loads(e.read().decode("utf-8", "replace")))[:200]
+        except Exception:
+            pass
+        return e.code, None, f"Discord said HTTP {e.code}{detail}"
     except Exception as e:
         return 0, None, str(e)
 

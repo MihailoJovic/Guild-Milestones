@@ -404,15 +404,25 @@ class App:
         if msg:
             return messagebox.showwarning("One thing first", msg)
         def run():
-            eng = E.Engine(c, self.log)
+            lines = []
+            def lg(t):
+                lines.append(t)
+                self.log(t)
+            self.log("Posting the digest...")
+            eng = E.Engine(c, lg)
             try:
                 eng.check(force_digest=True)
                 if eng.shared and eng.role == "standby":
-                    self.log("Only the Announcer can post the digest. Ask them, or wait for the role to move.")
+                    lg("Only the Announcer can post the digest. Ask them, or wait for the role to move.")
             except Exception as e:
-                self.log(f"Digest problem: {e}")
+                lg(f"Digest problem: {e}")
+                E.log_error(f"digest button failed: {e!r}")
             if eng.shared and not self.running:
                 eng.release()
+            shown = "\n".join(lines[-5:]) or "Nothing happened. Check the Setup tab."
+            ok = any("digest posted" in t.lower() or "digest updated" in t.lower() for t in lines)
+            show = messagebox.showinfo if ok else messagebox.showwarning
+            self.q.put(lambda: show("Weekly digest", shown))
         threading.Thread(target=run, daemon=True).start()
 
     def check_update(self, manual):

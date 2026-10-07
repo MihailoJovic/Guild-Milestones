@@ -1,5 +1,10 @@
 # What's new
 
+## v0.8.1
+**The digest button now tells you exactly what happened.**
+- "Post / refresh the digest now" shows a pop-up with the result, including Discord's own error message if it refuses.
+- The weekly digest can no longer grow past Discord's size limit.
+
 ## v0.8.0
 **The weekly digest now has a leaderboard.**
 - New 🏆 Leaderboard in the weekly digest: top three for rare-or-better drops and for boss kills.
