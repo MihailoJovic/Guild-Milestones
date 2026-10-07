@@ -5,10 +5,16 @@ profession skill tiers, welcome posts, newcomer tips and a self-updating weekly 
 
 It has two parts:
 
-- **GuildMilestones/** - the in-game addon. It snapshots the guild roster.
+- **GuildMilestones/** - the in-game addon. It shouts level and profession milestones in guild chat and snapshots the guild roster.
 - **Companion app** (`GuildMilestones.pyw`) - reads that snapshot and posts to a Discord webhook.
 
-## Install
+## For guild members (addon only)
+No Python, no Discord setup. Download `GuildMilestones-addon-vX.Y.Z.zip`, unzip it into
+`World of Warcraft\_<version>_\Interface\AddOns\` so you end up with `AddOns\GuildMilestones\GuildMilestones.toc`,
+then log in. It's on by default. Settings: Esc > Options > AddOns > Guild Milestones, or `/gms options`.
+Handy commands: `/gms crafters alchemy`, `/gms week`, `/gms test`.
+
+## For officers (addon + companion app)
 1. Install [Python](https://www.python.org/downloads/) (tick "Add python.exe to PATH").
 2. Download this repo (green **Code** button, then **Download ZIP**) and unzip it somewhere you'll keep.
 3. Double-click `GuildMilestones.pyw`.

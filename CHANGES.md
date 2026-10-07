@@ -1,5 +1,13 @@
 # What's new
 
+## v0.6.0
+**The addon now announces milestones live in guild chat.**
+- Level and profession milestones are shouted in guild chat by the addon itself, so friends just install it and leave it on.
+- In-game settings panel (Esc > Options > AddOns), plus `/gms options`, `/gms crafters <profession>` and `/gms week`.
+- The app skips posts the addon already shouted, and Discord embeds use class colours.
+- Shorter "What's new" in the update dialog.
+
+
 ## v0.5.1
 **Updates are easier to trust and easier to troubleshoot.**
 - **Check for updates** now always tells you what it found, right on the Setup tab: the version on GitHub, the version you have, and when it checked. No more silence.

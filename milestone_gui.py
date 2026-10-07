@@ -61,7 +61,7 @@ class App:
                   ("webhook", "digest_webhook", "game_folder", "milestones", "max_level", "tiers", "level_msg", "welcome_msg",
                    "shared_url", "shared_token", "my_name")}
         self.b = {k: tk.BooleanVar(value=bool(cfg[k])) for k in
-                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled", "shared_on")}
+                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled", "shared_on", "skip_shouted")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
         self.device_id, self.engine = cfg["device_id"], None
 
@@ -145,7 +145,8 @@ class App:
         for key, text in (("announce_levels", "Level milestones"),
                           ("announce_firsts", "“First in the guild” and “first of a class”"),
                           ("announce_tiers", "Profession skill tiers"),
-                          ("welcome_new", "Welcome new members")):
+                          ("welcome_new", "Welcome new members"),
+                          ("skip_shouted", "Skip posts the addon already shouted in guild chat")):
             ttk.Checkbutton(left, text=text, variable=self.b[key]).pack(anchor="w", pady=3)
 
         nums = ttk.LabelFrame(p, text=" Numbers ", padding=12)
@@ -405,7 +406,7 @@ class App:
             return messagebox.showinfo("Use the .pyw version", "The .exe can't update itself.\nOpen GuildMilestones.pyw instead, "
                                        "and updating becomes one click.")
         notes = E.latest_notes(self.latest)
-        extra = ("\n\nWhat's new:\n" + (notes[:700] + ("..." if len(notes) > 700 else ""))) if notes else ""
+        extra = f"\n\nWhat's new: {notes[:160]}" if notes else ""
         if not messagebox.askyesno("Update", f"Update to v{self.latest}?\n\nThe app will restart. Your settings are kept.{extra}"):
             return
         self.upd.state(["disabled"])

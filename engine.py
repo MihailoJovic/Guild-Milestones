@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -35,13 +35,17 @@ MAX_WELCOMES = 5          # more brand-new names than this at once = probably a 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 TIER_NAMES = {75: "Journeyman", 150: "Expert", 225: "Artisan", 300: "Master"}
 CLASS_NAMES = {"DEATHKNIGHT": "Death Knight", "DEMONHUNTER": "Demon Hunter"}
+CLASS_COLORS = {"DEATHKNIGHT": 0xC41E3A, "DEMONHUNTER": 0xA330C9, "DRUID": 0xFF7C0A, "EVOKER": 0x33937F,
+                "HUNTER": 0xAAD372, "MAGE": 0x3FC7EB, "MONK": 0x00FF98, "PALADIN": 0xF48CBA, "PRIEST": 0xFFFFFF,
+                "ROGUE": 0xFFF468, "SHAMAN": 0x0070DD, "WARLOCK": 0x8788EE, "WARRIOR": 0xC69B6D}
+DEFAULT_COLOR = 0x5865F2
 
 DEFAULTS = {
     "webhook": "", "digest_webhook": "", "game_folder": "", "savedvars": "",
     "auto_start": False, "auto_update_addon": True,
     "shared_on": False, "shared_url": "", "shared_token": "", "my_name": "", "device_id": "",
     "announce_levels": True, "announce_firsts": True, "announce_tiers": True,
-    "welcome_new": True, "digest_enabled": True,
+    "welcome_new": True, "digest_enabled": True, "skip_shouted": True,
     "milestones": "10, 20, 30, 40, 50, 60", "max_level": 60, "tiers": "75, 150, 225, 300",
     "week_start": 0,
     "level_msg": "🎉 Congrats **{name}** on hitting Level {level}!",
@@ -92,6 +96,10 @@ def short(name):
     return name.split("-")[0]
 
 
+def class_color(c):
+    return CLASS_COLORS.get(str(c or "").upper(), DEFAULT_COLOR)
+
+
 def class_name(c):
     return CLASS_NAMES.get(c, c.title()) if c else "Adventurer"
 
@@ -124,9 +132,19 @@ def parse_file(path):
             profs.append({"prof": p[0], "name": p[1], "skill": int(p[2])})
         except (IndexError, ValueError):
             pass
+    heard = []                                  # what the addon already announced in guild chat
+    for row in _block(text, "heard"):
+        p = row.split("|")
+        try:
+            if p[1] == "L":
+                heard.append({"name": p[0], "kind": "L", "level": int(p[2])})
+            elif p[1] == "S":
+                heard.append({"name": p[0], "kind": "S", "prof": p[2], "tier": int(p[3])})
+        except (IndexError, ValueError):
+            pass
     m = re.search(r'\["updated"\]\s*=\s*(\d+)', text)
     updated = int(m.group(1)) if m else int(Path(path).stat().st_mtime)
-    return {"members": members, "profs": profs, "updated": updated,
+    return {"members": members, "profs": profs, "heard": heard, "updated": updated,
             "legacy": '["entries"]' in text and not members}
 
 
@@ -168,6 +186,10 @@ def process(snap, state, cfg, now):
     levels = nums(cfg["milestones"]) | {cap}
     tiers, tips = nums(cfg["tiers"]), parse_tips(cfg["tips"])
     today = now.date().isoformat()
+    skip = bool(cfg.get("skip_shouted", True))
+    heard_l = {(h["name"].lower(), h["level"]) for h in snap.get("heard", []) if h["kind"] == "L"}
+    heard_s = {(h["name"].lower(), h["prof"].lower(), h["tier"]) for h in snap.get("heard", []) if h["kind"] == "S"}
+    cls_of = {short(m["name"]).lower(): m["cls"] for m in snap["members"]}
 
     wid = week_id(now, cfg["week_start"])
     if st["week"].get("id") != wid:
@@ -196,7 +218,8 @@ def process(snap, state, cfg, now):
             if name not in quiet:
                 week["new"].append({"name": who, "cls": cname, "level": level})
                 if cfg["welcome_new"]:
-                    msgs.append(fmt(cfg["welcome_msg"], name=who, level=level, cls=cname))
+                    msgs.append({"text": fmt(cfg["welcome_msg"], name=who, level=level, cls=cname),
+                                 "color": class_color(cls)})
             continue
 
         old = rec["level"]
@@ -220,18 +243,25 @@ def process(snap, state, cfg, now):
                             class_first = True
                 week["milestones"].append({"name": who, "level": top})
                 if cfg["announce_levels"]:
-                    if top == cap:
-                        text = f"🏆 **{who}** hit the level cap: **Level {top}**! Absolute legend."
-                    else:
-                        text = fmt(cfg["level_msg"], name=who, level=top, cls=cname)
+                    shouted = skip and (who.lower(), top) in heard_l      # the player already said it in guild chat
+                    extra = []
                     if cfg["announce_firsts"]:
                         if guild_first:
-                            text += f"\n🥇 First in the guild to hit {top}!"
+                            extra.append(f"🥇 First in the guild to hit {top}!")
                         elif class_first:
-                            text += f"\n🥈 First {cname} in the guild to hit {top}!"
+                            extra.append(f"🥈 First {cname} in the guild to hit {top}!")
                     if top in tips and top != cap:
-                        text += f"\n💡 {tips[top]}"
-                    msgs.append(text)
+                        extra.append(f"💡 {tips[top]}")
+                    if shouted:
+                        text = "\n".join([f"**{who}** · level {top}"] + extra) if extra else ""
+                    else:
+                        if top == cap:
+                            text = f"🏆 **{who}** hit the level cap: **Level {top}**! Absolute legend."
+                        else:
+                            text = fmt(cfg["level_msg"], name=who, level=top, cls=cname)
+                        text = "\n".join([text] + extra)
+                    if text:
+                        msgs.append({"text": text, "color": class_color(cls)})
         rec["level"] = level
 
     # professions: only announce for (member, profession) pairs we've already seen
@@ -244,8 +274,9 @@ def process(snap, state, cfg, now):
                 t = max(hits)
                 label = f"{TIER_NAMES[t]} ({t})" if t in TIER_NAMES else str(t)
                 week["tiers"].append({"name": short(p["name"]), "prof": p["prof"], "tier": label})
-                if cfg["announce_tiers"]:
-                    msgs.append(f"🔨 **{short(p['name'])}** reached **{label}** in {p['prof']}!")
+                if cfg["announce_tiers"] and not (skip and (short(p["name"]).lower(), p["prof"].lower(), t) in heard_s):
+                    msgs.append({"text": f"🔨 **{short(p['name'])}** reached **{label}** in {p['prof']}!",
+                                 "color": class_color(cls_of.get(short(p["name"]).lower()))})
         mine[p["prof"]] = p["skill"]
 
     if snap["profs"]:
@@ -309,7 +340,7 @@ def build_digest(st, cfg):
 def _request(method, url, payload=None, timeout=15):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json", "User-Agent": "GuildMilestones/0.2"})
+                                 headers={"Content-Type": "application/json", "User-Agent": "GuildMilestones/" + APP_VERSION})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = r.read().decode("utf-8")
@@ -320,9 +351,12 @@ def _request(method, url, payload=None, timeout=15):
         return 0, None, str(e)
 
 
-def post(url, content=None, embed=None, wait=False):
+def post(url, content=None, embed=None, wait=False, embeds=None):
     """Returns (ok, message_id, error)."""
-    payload = {"content": content} if content else {"embeds": [embed]}
+    if content:
+        payload = {"content": content}
+    else:
+        payload = {"embeds": embeds if embeds is not None else [embed]}
     if wait:
         url += ("&" if "?" in url else "?") + "wait=true"
     status, body, err = _request("POST", url, payload)
@@ -356,16 +390,85 @@ def push_digest(st, cfg, force=False):
     return False, err or "no message id came back"
 
 
-def chunk(msgs, limit=1900):
-    out, cur = [], ""
+def chunk(msgs, per_post=8, limit=5000):
+    """Group announcements into Discord posts (each up to 8 colour-coded cards, within Discord's size limit)."""
+    out, cur, used = [], [], 0
     for m in msgs:
-        if cur and len(cur) + len(m) + 2 > limit:
+        n = len(m["text"])
+        if cur and (len(cur) >= per_post or used + n > limit):
             out.append(cur)
-            cur = ""
-        cur = f"{cur}\n\n{m}" if cur else m
+            cur, used = [], 0
+        cur.append(m)
+        used += n
     if cur:
         out.append(cur)
     return out
+
+
+def to_embeds(items):
+    return [{"description": it["text"][:4000], "color": it["color"]} for it in items]
+
+
+def post_items(url, items):
+    return post(url, embeds=to_embeds(items))
+
+
+# ------------------------------ the /gms week file ------------------------------
+def week_title(st):
+    start = datetime.strptime(st["week"]["id"], "%Y-%m-%d")
+    return f"Guild week of {start.strftime('%b')} {start.day}"
+
+
+def week_lines(st):
+    w, lines = st["week"], []
+    new = ", ".join(f"{n['name']} ({n['cls']} {n['level']})" for n in w["new"][-5:])
+    lines.append("New members: " + (new or "nobody yet"))
+    gains = sorted(w["gains"].items(), key=lambda kv: -kv[1][0])[:3]
+    lines.append("Top level-ups: " + (", ".join(f"{n} +{g} (now {lv})" for n, (g, lv) in gains) or "quiet so far"))
+    lines.append("Milestones: " + (", ".join(f"{m['name']} {m['level']}" for m in w["milestones"][-5:]) or "none yet"))
+    if w["tiers"]:
+        lines.append("Skill tiers: " + ", ".join(f"{t['name']} {t['tier']} {t['prof']}" for t in w["tiers"][-4:]))
+    crafters = sorted(st.get("crafters", {}).items(), key=lambda kv: -len(kv[1]))[:6]
+    if crafters:
+        lines.append("Crafters: " + ", ".join(f"{p} {len(r)}" for p, r in crafters))
+    return lines
+
+
+def lua_str(text):
+    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\r", " ").replace("\n", " ") + '"'
+
+
+def write_week_file(cfg, st):
+    """Drop a small Lua file into the addon folder so /gms week can show the digest in game."""
+    g = str(cfg.get("game_folder", "")).strip()
+    if not g or not st.get("week", {}).get("id"):
+        return False
+    folder = Path(g) / "Interface" / "AddOns" / "GuildMilestones"
+    if not folder.is_dir():
+        return False
+    title, lines = week_title(st), week_lines(st)
+    key = hashlib.md5((title + "\n" + "\n".join(lines)).encode("utf-8")).hexdigest()
+    target = folder / "Digest.lua"
+    try:
+        if f"-- key:{key}" in target.read_text(encoding="utf-8"):
+            return True                                   # nothing changed since the last write
+    except Exception:
+        pass
+    body = ",\n".join("        " + lua_str(x) for x in lines)
+    content = ("-- Written by the Guild Milestones companion app. Safe to delete.\n"
+               f"-- key:{key}\n"
+               "GuildMilestonesWeek = {\n"
+               f"    title = {lua_str(title)},\n"
+               f"    asof = {lua_str(time.strftime('%H:%M, %b %d'))},\n"
+               f"    lines = {{\n{body}\n    }},\n}}\n")
+    try:
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
+        return True
+    except Exception as e:
+        log_error(f"couldn't write Digest.lua: {e!r}")
+        return False
 
 
 # ------------------------------- shared service -------------------------------
@@ -434,7 +537,7 @@ class Engine:
                 self.log(n)
             parts = chunk(msgs)
             for i, part in enumerate(parts):
-                ok, _, err = post(self.cfg["webhook"], content=part)
+                ok, _, err = post_items(self.cfg["webhook"], part)
                 if not ok:
                     self.log(f"Couldn't post to Discord ({err}). I'll try again shortly.")
                     return False
@@ -442,6 +545,7 @@ class Engine:
                     time.sleep(1.2)
             if msgs:
                 self.log(f"Posted {len(msgs)} announcement(s).")
+            write_week_file(self.cfg, st)
             if self.cfg["digest_enabled"] or force_digest:
                 ok, what = push_digest(st, self.cfg, force=force_digest)
                 if what != "unchanged":
@@ -510,7 +614,7 @@ class Engine:
             return None
         if snap["members"] and snap["updated"] > self.uploaded_ts:
             return {"updated": snap["updated"], "members": snap["members"], "profs": snap["profs"],
-                    "from": self.cfg.get("my_name", "")}
+                    "heard": snap.get("heard", [])[-150:], "from": self.cfg.get("my_name", "")}
         return None
 
     def shared_step(self, force=False, force_digest=False):
@@ -569,6 +673,7 @@ class Engine:
         if msgs:
             self.log(f"Posting {len(msgs)} announcement(s)...")
         self._flush()
+        write_week_file(self.cfg, new)
         save_state(new)
         self.log(f"Checked {len(snap['members'])} members.")
         return True
@@ -576,7 +681,7 @@ class Engine:
     def _flush(self):
         while self.outbox:
             text, tries = self.outbox[0]
-            ok, _, err = post(self.cfg["webhook"], content=text)
+            ok, _, err = post_items(self.cfg["webhook"], text)
             if ok:
                 self.outbox.pop(0)
                 self.fail_streak = 0
@@ -726,7 +831,13 @@ def latest_notes(version):
     try:
         raw = _fetch(_fresh(f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/CHANGES.md")).decode("utf-8", "replace")
         m = re.search(r"^##\s*v?%s\b[^\n]*\n(.*?)(?=^##\s|\Z)" % re.escape(version), raw, re.S | re.M)
-        return m.group(1).strip() if m else ""
+        if not m:
+            return ""
+        for line in m.group(1).splitlines():            # the update dialog shows only the one-line headline
+            line = line.strip().lstrip("-* ").replace("**", "").replace("`", "").strip()
+            if line:
+                return line
+        return ""
     except Exception:
         return ""
 
