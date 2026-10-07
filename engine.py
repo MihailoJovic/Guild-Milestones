@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.8.0"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -162,7 +162,7 @@ def week_id(now, start):
 
 
 def new_week(wid):
-    return {"id": wid, "new": [], "gains": {}, "milestones": [], "tiers": []}
+    return {"id": wid, "new": [], "gains": {}, "milestones": [], "tiers": [], "loot": {}, "boss": {}}
 
 
 def load_state():
@@ -341,6 +341,15 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         seen_set.add(key)
         who, color = short(ev["name"]), class_color(cls_of.get(short(ev["name"]).lower()))
         kind = ev["kind"]
+        wk = st.setdefault("week", {})                     # weekly leaderboard counts
+        if kind == "I":
+            try:
+                if int(ev["b"].split(":")[0]) >= 3:
+                    wk.setdefault("loot", {})[who] = wk.setdefault("loot", {}).get(who, 0) + 1
+            except ValueError:
+                pass
+        elif kind == "B":
+            wk.setdefault("boss", {})[who] = wk.setdefault("boss", {}).get(who, 0) + 1
         if kind == "I" and cfg.get("event_loot", True):
             try:
                 q, ilvl = (int(x) for x in ev["b"].split(":"))
@@ -381,6 +390,18 @@ def _clip(lines, limit):
     return "\n".join(out)
 
 
+def leaderboard(w):
+    """Top three per category for the week: [(title, [(name, text), ...]), ...]. Empty ones are left out."""
+    cats = [("Rare+ drops", w.get("loot", {}), "drop"),
+            ("Boss kills", w.get("boss", {}), "kill")]
+    out = []
+    for title, data, unit in cats:
+        top = sorted(data.items(), key=lambda kv: -kv[1])[:3]
+        if top:
+            out.append((title, [(n, f"{c} {unit}{'s' if c != 1 else ''}") for n, c in top]))
+    return out
+
+
 def build_digest(st, cfg):
     w = st["week"]
     start = datetime.strptime(w["id"], "%Y-%m-%d")
@@ -395,6 +416,12 @@ def build_digest(st, cfg):
 
     ms = [f"• **{m['name']}** → Level {m['level']}" for m in w["milestones"][-10:]]
     fields.append({"name": "🎯 Milestones hit", "value": _clip(ms, 600) or "*None yet this week.*"})
+
+    medals = ["🥇", "🥈", "🥉"]
+    board = [f"**{t}**\n" + "\n".join(f"{medals[i]} {n} · {txt}" for i, (n, txt) in enumerate(rows))
+             for t, rows in leaderboard(w)]
+    if board:
+        fields.append({"name": "🏆 Leaderboard", "value": "\n\n".join(board)[:1000]})
 
     if w["tiers"] or st["crafters"]:
         tr = [f"• **{t['name']}** · {t['tier']} {t['prof']}" for t in w["tiers"][-8:]]
@@ -518,6 +545,8 @@ def week_lines(st):
     lines.append("Milestones: " + (", ".join(f"{m['name']} {m['level']}" for m in w["milestones"][-5:]) or "none yet"))
     if w["tiers"]:
         lines.append("Skill tiers: " + ", ".join(f"{t['name']} {t['tier']} {t['prof']}" for t in w["tiers"][-4:]))
+    for t, rows in leaderboard(w):
+        lines.append(f"{t}: " + ", ".join(f"{n} ({txt})" for n, txt in rows))
     crafters = sorted(st.get("crafters", {}).items(), key=lambda kv: -len(kv[1]))[:6]
     if crafters:
         lines.append("Crafters: " + ", ".join(f"{p} {len(r)}" for p, r in crafters))

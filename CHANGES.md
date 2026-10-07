@@ -1,5 +1,14 @@
 # What's new
 
+## v0.8.0
+**The weekly digest now has a leaderboard.**
+- New 🏆 Leaderboard in the weekly digest: top three for rare-or-better drops and for boss kills.
+- `/gms week` in game shows the same leaderboard.
+
+## v0.7.2
+**Fixed the "Copy the Guild Info line" button.**
+- It now really copies the line, and also shows it in a small window you can select from.
+
 ## v0.7.1
 **Loot and boss kills now get rich Discord posts.**
 - Loot posts show the item's icon, quality colour, item level and a link to its page.

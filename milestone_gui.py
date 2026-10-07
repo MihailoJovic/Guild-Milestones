@@ -181,10 +181,27 @@ class App:
 
     def copy_line(self):
         line = E.addon_line(self.collect())
-        self.clipboard_clear()
-        self.clipboard_append(line)
-        messagebox.showinfo("Copied", "Copied:\n\n" + line + "\n\nOnly needed if the automatic publish doesn't work: "
-                            "paste it anywhere in the Guild Info box (Guild window > Info).")
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(line)
+            self.root.update()                       # makes Windows keep the text after the dialog closes
+            note = "Copied to your clipboard:"
+        except Exception as e:
+            E.log_error(f"copy failed: {e!r}")
+            note = "Couldn't reach the clipboard. Select and copy this yourself:"
+        win = tk.Toplevel(self.root)
+        win.title("Guild Info line")
+        win.transient(self.root)
+        ttk.Label(win, text=note, padding=(14, 12, 14, 4)).pack(anchor="w")
+        box = ttk.Entry(win, width=52)
+        box.insert(0, line)
+        box.pack(padx=14)
+        box.focus_set()
+        box.selection_range(0, "end")
+        ttk.Label(win, style="Muted.TLabel", wraplength=380, justify="left", padding=(14, 8),
+                  text="Only needed if the automatic publish doesn't work. Paste it anywhere in the "
+                       "Guild Info box (Guild window > Info).").pack(anchor="w")
+        ttk.Button(win, text="Close", command=win.destroy).pack(pady=(0, 12))
 
     def tab_digest(self, p):
         ttk.Checkbutton(p, text="Keep a weekly digest message in Discord", variable=self.b["digest_enabled"]).pack(anchor="w")

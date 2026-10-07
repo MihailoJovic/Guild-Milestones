@@ -1,7 +1,7 @@
 ## Interface: 16001, 120100
 ## Title: Guild Milestones
 ## Notes: Announces your level, loot, boss and profession milestones in guild chat, and keeps a guild snapshot for the companion app.
-## Version: 0.7.1
+## Version: 0.8.0
 ## SavedVariables: GuildMilestonesDB
 
 GuildMilestones.lua
