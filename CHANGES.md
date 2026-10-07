@@ -1,5 +1,25 @@
 # What's new
 
+## v0.7.1
+**Loot and boss kills now get rich Discord posts.**
+- Loot posts show the item's icon, quality colour, item level and a link to its page.
+- Boss kills get their own post. Deaths and quest turn-ins are optional.
+- The addon shares these events between members, so an officer's app sees everyone who's online.
+
+## v0.7.0
+**A new settings screen, plus loot, boss, death and quest announcements.**
+- Rare-or-better loot is announced with the item link, its quality and item level.
+- Boss kills, deaths and quest turn-ins are optional, and each player picks their own.
+- The settings screen now has simple < value > pickers, laid out like the DOINK one.
+- Announcements are capped so a loot burst can't flood guild chat.
+
+## v0.6.1
+**Set your milestones once in the app and every member's addon follows.**
+- The milestone levels, level cap and skill tiers you set in the app now reach everyone's addon automatically, through the guild's Info text.
+- The addon's settings panel is simpler: members only choose whether to announce and where. The guild decides which milestones count.
+- New `/gms guild` shows what your guild chose, and `/gms publish` pushes the app's settings into Guild Info (officers).
+- New **Copy the Guild Info line** button in the app, as a backup.
+
 ## v0.6.0
 **The addon now announces milestones live in guild chat.**
 - Level and profession milestones are shouted in guild chat by the addon itself, so friends just install it and leave it on.

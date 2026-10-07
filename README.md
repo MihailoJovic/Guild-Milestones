@@ -11,7 +11,7 @@ It has two parts:
 ## For guild members (addon only)
 No Python, no Discord setup. Download `GuildMilestones-addon-vX.Y.Z.zip`, unzip it into
 `World of Warcraft\_<version>_\Interface\AddOns\` so you end up with `AddOns\GuildMilestones\GuildMilestones.toc`,
-then log in. It's on by default. Settings: Esc > Options > AddOns > Guild Milestones, or `/gms options`.
+then log in. It's on by default. Which milestones count is decided by the guild (set in the officers' app), so there is nothing to type. Settings: Esc > Options > AddOns > Guild Milestones, or `/gms options`.
 Handy commands: `/gms crafters alchemy`, `/gms week`, `/gms test`.
 
 ## For officers (addon + companion app)

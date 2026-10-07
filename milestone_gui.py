@@ -61,7 +61,7 @@ class App:
                   ("webhook", "digest_webhook", "game_folder", "milestones", "max_level", "tiers", "level_msg", "welcome_msg",
                    "shared_url", "shared_token", "my_name")}
         self.b = {k: tk.BooleanVar(value=bool(cfg[k])) for k in
-                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled", "shared_on", "skip_shouted")}
+                  ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new", "digest_enabled", "shared_on", "skip_shouted", "event_loot", "event_boss", "event_death", "event_quest")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
         self.device_id, self.engine = cfg["device_id"], None
 
@@ -146,7 +146,11 @@ class App:
                           ("announce_firsts", "“First in the guild” and “first of a class”"),
                           ("announce_tiers", "Profession skill tiers"),
                           ("welcome_new", "Welcome new members"),
-                          ("skip_shouted", "Skip posts the addon already shouted in guild chat")):
+                          ("skip_shouted", "Skip posts the addon already shouted in guild chat"),
+                          ("event_loot", "Loot: rich post with the item's icon and link"),
+                          ("event_boss", "Boss kills"),
+                          ("event_death", "Deaths"),
+                          ("event_quest", "Quest turn-ins")):
             ttk.Checkbutton(left, text=text, variable=self.b[key]).pack(anchor="w", pady=3)
 
         nums = ttk.LabelFrame(p, text=" Numbers ", padding=12)
@@ -156,6 +160,12 @@ class App:
                                           ("Skill tiers", "tiers"))):
             ttk.Label(nums, text=label).grid(row=r, column=0, sticky="w", pady=4)
             ttk.Entry(nums, textvariable=self.s[key], width=26).grid(row=r, column=1, sticky="ew", padx=(10, 0))
+        ttk.Label(nums, style="Muted.TLabel", wraplength=300, justify="left",
+                  text="These also go to everyone's addon: an officer's addon puts them in the guild's Info "
+                       "text, and each member's addon reads them at login. Nothing to sync by hand.").grid(
+                  row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Button(nums, text="Copy the Guild Info line", command=self.copy_line).grid(
+                  row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         msgs = ttk.LabelFrame(p, text=" Messages · {name} {level} {cls} get filled in ", padding=12)
         msgs.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
@@ -168,6 +178,13 @@ class App:
         tips.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         self.tips = textbox(tips, 4)
         self.tips.pack(fill="x")
+
+    def copy_line(self):
+        line = E.addon_line(self.collect())
+        self.clipboard_clear()
+        self.clipboard_append(line)
+        messagebox.showinfo("Copied", "Copied:\n\n" + line + "\n\nOnly needed if the automatic publish doesn't work: "
+                            "paste it anywhere in the Guild Info box (Guild window > Info).")
 
     def tab_digest(self, p):
         ttk.Checkbutton(p, text="Keep a weekly digest message in Discord", variable=self.b["digest_enabled"]).pack(anchor="w")

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.1"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -46,6 +46,7 @@ DEFAULTS = {
     "shared_on": False, "shared_url": "", "shared_token": "", "my_name": "", "device_id": "",
     "announce_levels": True, "announce_firsts": True, "announce_tiers": True,
     "welcome_new": True, "digest_enabled": True, "skip_shouted": True,
+    "event_loot": True, "event_boss": True, "event_death": False, "event_quest": False, "loot_min_quality": 3,
     "milestones": "10, 20, 30, 40, 50, 60", "max_level": 60, "tiers": "75, 150, 225, 300",
     "week_start": 0,
     "level_msg": "🎉 Congrats **{name}** on hitting Level {level}!",
@@ -142,9 +143,16 @@ def parse_file(path):
                 heard.append({"name": p[0], "kind": "S", "prof": p[2], "tier": int(p[3])})
         except (IndexError, ValueError):
             pass
+    events = []                                 # loot, bosses, deaths, quests the addon recorded
+    for row in _block(text, "events"):
+        p = row.split("|")
+        try:
+            events.append({"kind": p[0], "name": p[1], "ts": int(p[2]), "a": p[3], "b": p[4], "c": p[5]})
+        except (IndexError, ValueError):
+            pass
     m = re.search(r'\["updated"\]\s*=\s*(\d+)', text)
     updated = int(m.group(1)) if m else int(Path(path).stat().st_mtime)
-    return {"members": members, "profs": profs, "heard": heard, "updated": updated,
+    return {"members": members, "profs": profs, "heard": heard, "events": events, "updated": updated,
             "legacy": '["entries"]' in text and not members}
 
 
@@ -285,8 +293,80 @@ def process(snap, state, cfg, now):
             crafters.setdefault(p["prof"], []).append([short(p["name"]), p["skill"]])
         st["crafters"] = {k: sorted(v, key=lambda r: -r[1]) for k, v in crafters.items()}
 
+    msgs.extend(event_items(snap.get("events", []), st, cfg, cls_of))
+
     st["initialized"] = True
     return st, msgs, notes
+
+
+# ------------------------------- loot, bosses, deaths, quests -------------------------------
+QUALITY_COLORS = {0: 0x9D9D9D, 1: 0xFFFFFF, 2: 0x1EFF00, 3: 0x0070DD, 4: 0xA335EE, 5: 0xFF8000}
+QUALITY_NAMES = {0: "Poor", 1: "Common", 2: "Uncommon", 3: "Rare", 4: "Epic", 5: "Legendary"}
+_ITEM_CACHE = {}
+
+
+def item_lookup(item_id):
+    """Icon and name for an item from Wowhead (one small request per item, remembered). Never fatal."""
+    if item_id in _ITEM_CACHE:
+        return _ITEM_CACHE[item_id]
+    info = {}
+    try:
+        raw = _fetch(f"https://nether.wowhead.com/classic/tooltip/item/{int(item_id)}", timeout=5)
+        data = json.loads(raw.decode("utf-8", "replace"))
+        if data.get("icon"):
+            info["icon"] = f"https://wow.zamimg.com/images/wow/icons/large/{data['icon']}.jpg"
+        info["name"] = data.get("name", "")
+    except Exception:
+        pass
+    _ITEM_CACHE[item_id] = info
+    return info
+
+
+def event_key(ev):
+    return f"{ev['kind']}|{ev['name']}|{ev['ts']}|{ev['a']}"
+
+
+def event_items(events, st, cfg, cls_of, lookup=item_lookup):
+    """Rich embeds for loot, boss kills, deaths and quests. The first run only learns what already exists."""
+    seen = st.get("events_seen")
+    keys = [event_key(e) for e in events]
+    if seen is None:
+        st["events_seen"] = keys[-500:]
+        return []
+    seen_set, items, looked = set(seen), [], 0
+    min_q = int(cfg.get("loot_min_quality", 3))
+    for ev, key in zip(events, keys):
+        if key in seen_set:
+            continue
+        seen_set.add(key)
+        who, color = short(ev["name"]), class_color(cls_of.get(short(ev["name"]).lower()))
+        kind = ev["kind"]
+        if kind == "I" and cfg.get("event_loot", True):
+            try:
+                q, ilvl = (int(x) for x in ev["b"].split(":"))
+                item_id = int(ev["a"])
+            except ValueError:
+                continue
+            if q < min_q:
+                continue
+            info = lookup(item_id) if looked < 5 else {}
+            looked += 1
+            name = ev["c"] or info.get("name") or f"Item {item_id}"
+            detail = QUALITY_NAMES.get(q, "") + (f" · item level {ilvl}" if ilvl else "")
+            item = {"text": f"**{who}** looted **{name}**\n{detail}", "color": QUALITY_COLORS.get(q, color),
+                    "title": name, "url": f"https://www.wowhead.com/classic/item={item_id}"}
+            if info.get("icon"):
+                item["thumb"] = info["icon"]
+            items.append(item)
+        elif kind == "B" and cfg.get("event_boss", True):
+            size = f" with a group of {ev['b']}" if ev["b"].isdigit() and int(ev["b"]) > 1 else ""
+            items.append({"text": f"⚔️ **{who}** defeated **{ev['a']}**{size}!", "color": color})
+        elif kind == "D" and cfg.get("event_death", False):
+            items.append({"text": f"💀 **{who}** has died in {ev['a'] or 'the wilds'}.", "color": color})
+        elif kind == "Q" and cfg.get("event_quest", False):
+            items.append({"text": f"📜 **{who}** completed **{ev['a']}**.", "color": color})
+    st["events_seen"] = (list(seen) + [k for k in keys if k not in set(seen)])[-500:]
+    return items
 
 
 # ------------------------------- the digest -------------------------------
@@ -406,7 +486,17 @@ def chunk(msgs, per_post=8, limit=5000):
 
 
 def to_embeds(items):
-    return [{"description": it["text"][:4000], "color": it["color"]} for it in items]
+    out = []
+    for it in items:
+        em = {"description": it["text"][:4000], "color": it["color"]}
+        if it.get("title"):
+            em["title"] = it["title"][:250]
+        if it.get("url"):
+            em["url"] = it["url"]
+        if it.get("thumb"):
+            em["thumbnail"] = {"url": it["thumb"]}
+        out.append(em)
+    return out
 
 
 def post_items(url, items):
@@ -438,29 +528,47 @@ def lua_str(text):
     return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\r", " ").replace("\n", " ") + '"'
 
 
+def addon_line(cfg):
+    """The one-line tag that tells every member's addon which milestones count."""
+    def clean(t):
+        return ",".join(str(n) for n in sorted(nums(t)))
+    try:
+        cap = int(cfg.get("max_level") or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    return f"[GMS L={clean(cfg.get('milestones', ''))} C={cap} T={clean(cfg.get('tiers', ''))}]"
+
+
 def write_week_file(cfg, st):
-    """Drop a small Lua file into the addon folder so /gms week can show the digest in game."""
+    """Drop a small Lua file into the addon folder: the weekly summary for /gms week, and the guild's
+    milestone settings, which an officer's addon publishes into Guild Info for everyone."""
     g = str(cfg.get("game_folder", "")).strip()
-    if not g or not st.get("week", {}).get("id"):
+    if not g:
         return False
     folder = Path(g) / "Interface" / "AddOns" / "GuildMilestones"
     if not folder.is_dir():
         return False
-    title, lines = week_title(st), week_lines(st)
-    key = hashlib.md5((title + "\n" + "\n".join(lines)).encode("utf-8")).hexdigest()
+    has_week = bool(st.get("week", {}).get("id"))
+    title, lines = (week_title(st), week_lines(st)) if has_week else ("", [])
+    line = addon_line(cfg)
+    key = hashlib.md5((title + "\n" + "\n".join(lines) + "\n" + line).encode("utf-8")).hexdigest()
     target = folder / "Digest.lua"
     try:
         if f"-- key:{key}" in target.read_text(encoding="utf-8"):
             return True                                   # nothing changed since the last write
     except Exception:
         pass
-    body = ",\n".join("        " + lua_str(x) for x in lines)
+    m = re.match(r"\[GMS L=([\d,]*) C=(\d+) T=([\d,]*)\]", line)
     content = ("-- Written by the Guild Milestones companion app. Safe to delete.\n"
                f"-- key:{key}\n"
-               "GuildMilestonesWeek = {\n"
-               f"    title = {lua_str(title)},\n"
-               f"    asof = {lua_str(time.strftime('%H:%M, %b %d'))},\n"
-               f"    lines = {{\n{body}\n    }},\n}}\n")
+               "GuildMilestonesConfig = {\n"
+               f"    levels = {lua_str(m.group(1))},\n    cap = {m.group(2)},\n    tiers = {lua_str(m.group(3))},\n}}\n")
+    if has_week:
+        body = ",\n".join("        " + lua_str(x) for x in lines)
+        content += ("GuildMilestonesWeek = {\n"
+                    f"    title = {lua_str(title)},\n"
+                    f"    asof = {lua_str(time.strftime('%H:%M, %b %d'))},\n"
+                    f"    lines = {{\n{body}\n    }},\n}}\n")
     try:
         tmp = target.with_suffix(".tmp")
         tmp.write_text(content, encoding="utf-8")
@@ -516,6 +624,10 @@ class Engine:
 
     def check(self, force_digest=False):
         """One pass: read file, announce, update digest, save. Returns False if it should retry."""
+        try:
+            write_week_file(self.cfg, load_state())      # keeps the addon's guild settings current
+        except Exception as e:
+            log_error(f"addon settings write failed: {e!r}")
         if self.shared:
             return self.shared_step(force=True, force_digest=force_digest)
         with _LOCK:
@@ -614,7 +726,7 @@ class Engine:
             return None
         if snap["members"] and snap["updated"] > self.uploaded_ts:
             return {"updated": snap["updated"], "members": snap["members"], "profs": snap["profs"],
-                    "heard": snap.get("heard", [])[-150:], "from": self.cfg.get("my_name", "")}
+                    "heard": snap.get("heard", [])[-150:], "events": snap.get("events", [])[-100:], "from": self.cfg.get("my_name", "")}
         return None
 
     def shared_step(self, force=False, force_digest=False):
