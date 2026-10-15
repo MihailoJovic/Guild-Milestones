@@ -18,8 +18,10 @@ Type `/gms` to open the Guild Milestones window (your progress, the guild race, 
 Handy commands: `/gms help`, `/gms test`, `/gms crafters alchemy`.
 
 ## For guild leaders (addon + companion app)
-1. Download **GuildMilestones.exe** from the [Releases page](https://github.com/MihailoJovic/Guild-Milestones/releases/latest)
-   and put it in a folder you'll keep, like `Documents\Guild Milestones`.
+1. **[Download GuildMilestones.exe](https://github.com/MihailoJovic/Guild-Milestones/releases/latest/download/GuildMilestones.exe)**
+   (this link always gets the newest version) and put it in a folder you'll keep, like `Documents\Guild Milestones`.
+   No unzipping needed. It's also inside the `GuildMilestones-kit` zip on the
+   [Releases page](https://github.com/MihailoJovic/Guild-Milestones/releases/latest).
 2. Double-click it. If Windows says "Windows protected your PC", click **More info**, then **Run anyway**
    (the app isn't code-signed yet, so Windows doesn't recognise it).
 3. Follow the **Get set up** checklist on the Home page: connect Discord, find your game folder, install the addon,

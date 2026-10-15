@@ -23,7 +23,12 @@ def main():
     with zipfile.ZipFile(addon, "w", zipfile.ZIP_DEFLATED) as z:
         add_dir(z, "GuildMilestones", "")
     kit = out / f"GuildMilestones-kit-v{VERSION}.zip"
+    exe = out / "GuildMilestones.exe"
     with zipfile.ZipFile(kit, "w", zipfile.ZIP_DEFLATED) as z:
+        if exe.exists():                                 # the ready-to-run app goes right at the top of the zip
+            z.write(exe, f"GuildMilestones-kit-v{VERSION}/GuildMilestones.exe")
+        else:
+            print("Note: dist/GuildMilestones.exe isn't built, so the kit has no .exe")
         for f in KIT_FILES:
             z.write(ROOT / f, f"GuildMilestones-kit-v{VERSION}/{f}")
         for d in KIT_DIRS:
