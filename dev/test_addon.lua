@@ -9,7 +9,7 @@ W.fire("PLAYER_LOGIN"); W.run()
 check("login prints ready line", W.printed("ready"))
 check("prefix registered", W.prefix == "GMS1")
 check("panel registered", W.category ~= nil)
-check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.9.0", W.addon[1] and W.addon[1].text)
+check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.10.0", W.addon[1] and W.addon[1].text)
 W.clear()
 
 -- 2. levels
@@ -83,7 +83,7 @@ W.fire("GUILD_ROSTER_UPDATE")
 check("snapshot members", GuildMilestonesDB.members and #GuildMilestonesDB.members == 2)
 check("snapshot row", GuildMilestonesDB.members[1] == "Thrall-Realm|60|SHAMAN|0|0", GuildMilestonesDB.members[1])
 check("snapshot profs", GuildMilestonesDB.profs and #GuildMilestonesDB.profs == 3, GuildMilestonesDB.profs and #GuildMilestonesDB.profs)
-check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.9.0")
+check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.10.0")
 
 -- 10. crafters
 slash("crafters")
@@ -338,15 +338,30 @@ check("snapshot remembers the guild", GuildMilestonesDB.guild == "Friends Foreve
 
 -- version notice
 W.clear()
-W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.10.0", "GUILD", "Jaina-Realm")
-check("newer version noticed", W.printed("v0.10.0") and W.printed("Jaina"))
+W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.11.0", "GUILD", "Jaina-Realm")
+check("newer version noticed", W.printed("v0.11.0") and W.printed("Jaina"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.11.0", "GUILD", "Jaina-Realm")
 check("notice only once per session", not W.printed("v0.11.0"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
-check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.9.0", W.addon[1] and W.addon[1].text)
+check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.10.0", W.addon[1] and W.addon[1].text)
 local nHeard = #GuildMilestonesDB.heard
 W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
 check("version messages are not logged as events", #GuildMilestonesDB.heard == nHeard)
+
+-- minimap button, tooltips, welcome
+check("minimap button made", GuildMilestonesMinimapButton ~= nil)
+GuildMilestonesMinimapButton.scripts.OnClick(GuildMilestonesMinimapButton, "LeftButton")
+check("minimap click toggles the window", GuildMilestonesWindow:IsShown() == false or GuildMilestonesWindow:IsShown() == true)
+GuildMilestonesMinimapButton.scripts.OnDragStart(GuildMilestonesMinimapButton)
+GuildMilestonesMinimapButton.scripts.OnUpdate(GuildMilestonesMinimapButton)
+check("dragging saves the angle", tonumber(GuildMilestonesDB.settings.minimapAngle) ~= nil, GuildMilestonesDB.settings.minimapAngle)
+W.ns.pages.settings.selectors.minimap.step(1)
+check("minimap can be hidden", GuildMilestonesDB.settings.minimap == false and not GuildMilestonesMinimapButton:IsShown())
+W.ns.pages.settings.selectors.minimap.step(1)
+check("minimap shown again", GuildMilestonesMinimapButton:IsShown())
+GuildMilestonesMinimapButton.scripts.OnEnter(GuildMilestonesMinimapButton)
+check("tooltip shows", W.tooltip == "Guild Milestones")
+check("welcomed once", GuildMilestonesDB.welcomed == "0.10.0")
 
 -- 15. logout saves
 GuildMilestonesDB.updated = nil; W.fire("PLAYER_LOGOUT")

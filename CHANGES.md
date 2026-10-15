@@ -1,5 +1,18 @@
 # What's new
 
+## v0.10.0
+**Guild Milestones is now one .exe: no Python needed, and it lives by your clock.**
+- Download GuildMilestones.exe from GitHub and double-click it. That's the whole install. It updates itself, too.
+- The app can sit in the system tray (the GM icon by the clock) and start with Windows, so it's always watching.
+- If something breaks while it's tucked away, Windows shows you a notification.
+- The update button now sits at the bottom left, above the status line, and is always there.
+- The Home checklist buttons now do the step for you: find the game folder, install the addon, and so on.
+- Pages scroll with a proper scrollbar.
+- Posts reach Discord faster: the app checks the addon's file every 2 seconds.
+- In game: a GM button by the minimap (click to open, right-click for settings, drag to move it).
+- In game: hover any setting to see what it does, and a short welcome the first time you log in.
+- New GM icon for the app, the tray and the addon.
+
 ## v0.9.0
 **A brand-new look, an in-game window, a Race to 60 board and weekly awards.**
 - The app has a new design: a sidebar, a Home page with a setup checklist and this week's numbers, and switches instead of tick boxes.

@@ -1,11 +1,12 @@
 @echo off
-REM OPTIONAL. You don't need an .exe: double-clicking GuildMilestones.pyw does the same job.
-REM If you do want one, remember to rebuild it after every update.
+REM Builds GuildMilestones.exe (one file, no Python needed to run it).
+REM Usually you don't need this: every GitHub release already has the .exe attached.
 echo Installing the packaging tool (one time)...
-py -m pip install pyinstaller
+py -m pip install --user pyinstaller
 echo.
 echo Building GuildMilestones.exe ...
-py -m PyInstaller --onefile --windowed --name GuildMilestones --add-data "GuildMilestones;GuildMilestones" milestone_gui.py
+py -m PyInstaller --noconfirm --clean --onefile --windowed --name GuildMilestones --icon assets\gm.ico ^
+   --add-data "GuildMilestones;GuildMilestones" --add-data "assets;assets" --hidden-import tray milestone_gui.py
 echo.
 echo Done! Your app is here: dist\GuildMilestones.exe
 pause

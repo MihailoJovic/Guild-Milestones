@@ -1,4 +1,4 @@
--- Guild Milestones 0.9.0
+-- Guild Milestones 0.10.0
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.9.0"
+local VERSION = "0.10.0"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -32,6 +32,7 @@ local DEFAULTS = {
     tierList = "75, 150, 225, 300",
     snapshot = true,                  -- keep guild data for the companion app
     toasts = true,                    -- small pop-ups when a guildmate hits a milestone
+    minimap = true,                   -- the GM button by the minimap
     lvlMode = "guild",                -- guild = the guild's milestone levels, every = each level, off
     lootMin = 3,                      -- -1 off, 0 any, 2 uncommon, 3 rare, 4 epic, 5 legendary
     deaths = false,
@@ -776,6 +777,7 @@ f:SetScript("OnEvent", function(_, event, ...)
         After(8, function() CheckSkills(false); skillsReady = true end)   -- baseline, announces nothing
         After(20, function() Tell("V|" .. VERSION) end)                    -- for the "newer version" notice
         After(6, function()
+            if ns.Welcome then pcall(ns.Welcome) end
             if IsInGuild() then
                 if S("shout") then
                     Say("v%s ready. Your milestones go to %s. Type |cfff2b84b/gms|r to open the window.", VERSION,

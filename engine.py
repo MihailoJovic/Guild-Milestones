@@ -4,8 +4,11 @@ import copy, glob, hashlib, io, uuid, json, os, re, shutil, sys, tempfile, threa
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.9.0"
+FROZEN = bool(getattr(sys, "frozen", False))              # True when running as GuildMilestones.exe
+APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
+RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
+ICON = RES_DIR / "assets" / "gm.ico"
+APP_VERSION = "0.10.0"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -30,7 +33,8 @@ def _migrate_old_files():
 
 
 _migrate_old_files()
-POLL_SECONDS = 15
+POLL_SECONDS = 2           # how often the addon file is checked (only read when it changed)
+RETRY_SECONDS = 30        # after a failed post, wait this long before trying again
 MAX_OUTBOX = 60           # announcements kept waiting when Discord can't be reached
 MAX_WELCOMES = 5          # more brand-new names than this at once = probably a roster hiccup, so stay quiet
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -43,7 +47,7 @@ DEFAULT_COLOR = 0x5865F2
 
 DEFAULTS = {
     "webhook": "", "digest_webhook": "", "game_folder": "", "savedvars": "",
-    "auto_start": False, "auto_update_addon": True,
+    "auto_start": False, "auto_update_addon": True, "tray_on_close": True, "start_with_windows": False,
     "shared_on": False, "shared_url": "", "shared_token": "", "my_name": "", "device_id": "",
     "announce_levels": True, "announce_firsts": True, "announce_tiers": True,
     "welcome_new": True, "welcome_back": True, "digest_enabled": True, "ladder_enabled": True, "skip_shouted": False,
@@ -1035,7 +1039,7 @@ class Engine:
     def run(self, stop):
         if self.shared:
             return self._run_shared(stop)
-        last, last_path, warned = 0, "", False
+        last, last_path, warned, retry_at = 0, "", False, 0.0
         self.log("Watching for changes. You can minimise this window.")
         while not stop.is_set():
             try:
@@ -1049,8 +1053,11 @@ class Engine:
                     if path != last_path:
                         last, last_path = 0, path
                     m = os.stat(path).st_mtime
-                    if m != last:
-                        last = m if self.check() else 0
+                    if m != last and time.time() >= retry_at:
+                        if self.check():
+                            last = m
+                        else:
+                            last, retry_at = 0, time.time() + RETRY_SECONDS
             except Exception as e:
                 self.log(f"Something went wrong: {e}")
             stop.wait(POLL_SECONDS)
@@ -1253,7 +1260,7 @@ def find_game_folders():
 
 
 def bundled_addon_dir():
-    return Path(getattr(sys, "_MEIPASS", APP_DIR)) / "GuildMilestones"
+    return RES_DIR / "GuildMilestones"
 
 
 def _toc_version(folder):
@@ -1308,8 +1315,9 @@ def install_addon(game):
 
 
 # ------------------------------- updating from GitHub -------------------------------
-UPDATE_FILES = ("engine.py", "milestone_gui.py", "GuildMilestones.pyw", "README.md", "CHANGES.md", "HOW TO UPDATE.txt", "build_exe.bat")
-UPDATE_DIRS = ("GuildMilestones", "shared")
+UPDATE_FILES = ("engine.py", "milestone_gui.py", "tray.py", "GuildMilestones.pyw", "README.md", "CHANGES.md",
+                "HOW TO UPDATE.txt", "build_exe.bat")
+UPDATE_DIRS = ("GuildMilestones", "shared", "assets")
 
 
 def _fetch(url, timeout=25):
@@ -1372,6 +1380,84 @@ def latest_notes(version):
         return ""
 
 
+RELEASE_EXE = "GuildMilestones.exe"
+
+
+def latest_release():
+    """(version, download URL of GuildMilestones.exe) from the newest GitHub release, or (None, None)."""
+    try:
+        data = json.loads(_fetch(f"https://api.github.com/repos/{REPO}/releases/latest").decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:                       # no release published yet
+            return None, None
+        raise
+    tag = str(data.get("tag_name") or "").lstrip("vV")
+    url = next((a.get("browser_download_url") for a in data.get("assets", []) if a.get("name") == RELEASE_EXE), None)
+    return (tag or None), url
+
+
+def apply_exe_update():
+    """Download the new GuildMilestones.exe next to this one, then swap them once this app has closed.
+    Returns (ok, message). The caller quits right after; a tiny helper script restarts the app."""
+    try:
+        latest, url = latest_release()
+        if not url:
+            return False, "The newest GitHub release has no GuildMilestones.exe yet. Try again in a few minutes."
+        data = _fetch(url, timeout=120)
+        if len(data) < 1_000_000 or not data.startswith(b"MZ"):
+            return False, "The download didn't look like the app, so I left everything as it was."
+        exe = Path(sys.executable)
+        new = exe.with_name(exe.stem + ".new.exe")
+        new.write_bytes(data)
+        bat = DATA_DIR / "finish_update.bat"
+        bat.write_text(
+            "@echo off\r\n"
+            "set tries=0\r\n"
+            ":wait\r\n"
+            "timeout /t 1 /nobreak >nul\r\n"
+            f'move /y "{new}" "{exe}" >nul 2>&1\r\n'
+            "if errorlevel 1 (set /a tries+=1 & if %tries% lss 30 goto wait)\r\n"
+            f'start "" "{exe}"\r\n'
+            'del "%~f0"\r\n', encoding="utf-8")
+        import subprocess
+        subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x08000000)      # no console window
+        return True, f"Update to v{latest} downloaded."
+    except PermissionError:
+        return False, "Windows wouldn't let me change the app's folder. Move the app to somewhere like Documents and try again."
+    except Exception as e:
+        return False, f"Couldn't update: {e}"
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def launch_command(tray=True):
+    """How Windows should start this app (the .exe, or pythonw with the .pyw)."""
+    if FROZEN:
+        cmd = f'"{sys.executable}"'
+    else:
+        pyw = Path(sys.executable).with_name("pythonw.exe")
+        cmd = f'"{pyw if pyw.exists() else sys.executable}" "{APP_DIR / 'GuildMilestones.pyw'}"'
+    return cmd + (" --tray" if tray else "")
+
+
+def set_start_with_windows(on):
+    """Add or remove the app from Windows startup (current user only). Returns '' or a problem."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            if on:
+                winreg.SetValueEx(k, "GuildMilestones", 0, winreg.REG_SZ, launch_command(tray=True))
+            else:
+                try:
+                    winreg.DeleteValue(k, "GuildMilestones")
+                except FileNotFoundError:
+                    pass
+        return ""
+    except Exception as e:
+        return f"Couldn't change Windows startup: {e}"
+
+
 def update_available():
     """(latest version, True if it is newer than this one)"""
     latest, _ = latest_version()
@@ -1381,7 +1467,7 @@ def update_available():
 def check_report():
     """Plain-English result of an update check, for the Setup tab."""
     try:
-        latest, _ = latest_version()
+        latest = latest_release()[0] if FROZEN else latest_version()[0]     # the .exe updates from Releases
     except Exception as e:
         log_error(f"update check failed: {e!r}")
         return {"ok": False, "newer": False, "latest": None, "text": f"Couldn't reach GitHub ({e})."}
@@ -1403,8 +1489,8 @@ def check_report():
 def apply_update(zip_bytes=None):
     """Download the repo as a zip, check the new code compiles, then copy it over this app.
     Returns (ok, message). The caller restarts the app afterwards."""
-    if getattr(sys, "frozen", False):
-        return False, "This is the .exe version, which can't update itself. Use GuildMilestones.pyw instead."
+    if FROZEN:
+        return apply_exe_update()
     try:
         data = zip_bytes or _fetch(f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip", timeout=60)
         with tempfile.TemporaryDirectory() as tmp:

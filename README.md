@@ -13,21 +13,25 @@ It has two parts:
 No Python, no Discord setup. Download the newest `GuildMilestones-addon-vX.Y.Z.zip` from the
 [Releases page](https://github.com/MihailoJovic/Guild-Milestones/releases), unzip it into
 your WoW: Forever folder's `Interface\AddOns\` so you end up with `AddOns\GuildMilestones\GuildMilestones.toc`
-(not `GuildMilestones\GuildMilestones\...`), then log in. If a guildmate has a newer version, the addon tells you in chat. It's on by default. Which milestones count is decided by the guild (set in the officers' app), so there is nothing to type. Settings: Esc > Options > AddOns > Guild Milestones, or `/gms options`.
+(not `GuildMilestones\GuildMilestones\...`), then log in. If a guildmate has a newer version, the addon tells you in chat. It's on by default. Which milestones count is decided by the guild (set in the guild leaders' app), so there is nothing to type. Settings: click the GM button by your minimap, or type `/gms`.
 Type `/gms` to open the Guild Milestones window (your progress, the guild race, crafters, the week, settings).
 Handy commands: `/gms help`, `/gms test`, `/gms crafters alchemy`.
 
-## For officers (addon + companion app)
-1. Install [Python](https://www.python.org/downloads/) (tick "Add python.exe to PATH").
-2. Download this repo (green **Code** button, then **Download ZIP**) and unzip it somewhere you'll keep.
-3. Double-click `GuildMilestones.pyw`.
-4. **Discord** page: follow the steps to make a webhook and paste it in. Click **Send examples of every post** to see what your guild will get.
-5. **Game & addon** page: click **Find it for me**, pick the WoW: Forever folder, then **Install / update addon**.
-6. In the game, type `/reload`, then click **Start watching**. The app sees new data whenever you log out or `/reload`.
+## For guild leaders (addon + companion app)
+1. Download **GuildMilestones.exe** from the [Releases page](https://github.com/MihailoJovic/Guild-Milestones/releases/latest)
+   and put it in a folder you'll keep, like `Documents\Guild Milestones`.
+2. Double-click it. If Windows says "Windows protected your PC", click **More info**, then **Run anyway**
+   (the app isn't code-signed yet, so Windows doesn't recognise it).
+3. Follow the **Get set up** checklist on the Home page: connect Discord, find your game folder, install the addon,
+   then log in to WoW once and type `/reload`.
+4. Click **Start watching**. Turn on **Start with Windows** (Game & addon page) and it keeps watching from the tray.
+
+Prefer running from source? Install [Python](https://www.python.org/downloads/), download this repo and double-click
+`GuildMilestones.pyw`.
 
 ## Update
-Download the ZIP again, unzip over the old folder (replace files), and open the app.
-Your settings live in `%APPDATA%\GuildMilestones`, so nothing is lost.
+The app tells you when there's a new version: click **Update** at the bottom left. Your settings live in
+`%APPDATA%\GuildMilestones`, so nothing is lost.
 
 ## Shared mode (several officers)
 If more than one officer runs the app, turn on **Shared mode** so only one announces at a time and they all share one memory.

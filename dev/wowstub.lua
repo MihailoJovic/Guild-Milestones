@@ -32,7 +32,7 @@ function W.newFrame(kind, tmpl)
     W.frames[#W.frames+1] = f
     return f
 end
-function CreateFrame(kind, name, parent, tmpl) return W.newFrame(kind, tmpl) end
+function CreateFrame(kind, name, parent, tmpl) local f = W.newFrame(kind, tmpl); if name then _G[name] = f end; f.shown = true; return f end
 
 function W.fire(ev, ...)
     for _, f in ipairs(W.frames) do
@@ -128,5 +128,12 @@ function UnitXPMax() return 100 end
 function GetGuildInfo() return W.guildName end
 RAID_CLASS_COLORS = { SHAMAN = { r = 0, g = 0.44, b = 0.87 }, MAGE = { r = 0.25, g = 0.78, b = 0.92 } }
 UIParent = W.newFrame("Frame")
+Minimap = W.newFrame("Frame")
+function Minimap:GetCenter() return 100, 100 end
+function Minimap:GetWidth() return 140 end
+function Minimap:GetEffectiveScale() return 1 end
+function GetCursorPosition() return 150, 160 end
+GameTooltip = W.newFrame("GameTooltip")
+function GameTooltip:SetText(t) W.tooltip = t end
 UISpecialFrames = {}
 return W

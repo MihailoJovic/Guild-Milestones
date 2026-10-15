@@ -404,21 +404,36 @@ end
 local ON_OFF = { { false, "Off" }, { true, "On" } }
 local SETTINGS = {
     { key = "announce", label = "Announce my milestones in",
+      tip = "Where your own milestones are said. Guild chat also reaches Discord if your guild linked it.",
       options = { { "OFF", "Nowhere (off)" }, { "GUILD", "Guild chat" }, { "OFFICER", "Officer chat" } },
       get = function() return ns.S("shout") and ns.S("channel") or "OFF" end,
       set = function(v) if v == "OFF" then ns.Set("shout", false) else ns.Set("shout", true); ns.Set("channel", v) end end },
-    { key = "lvlMode", label = "Level-ups",
+    { key = "lvlMode", label = "Level-ups", tip = "Which of your level-ups are announced. Your guild picks the milestone levels.",
       options = { { "guild", "Guild's milestones" }, { "every", "Every level" }, { "off", "Off" } } },
-    { key = "lootMin", label = "Loot",
+    { key = "lootMin", label = "Loot", tip = "Announce items you loot from this quality up.",
       options = { { -1, "Off" }, { 0, "Everything" }, { 2, "Green or better" }, { 3, "Blue or better" },
                   { 4, "Purple or better" }, { 5, "Legendary only" } } },
-    { key = "bosses", label = "Boss kills", options = ON_OFF },
-    { key = "deaths", label = "Deaths", options = ON_OFF },
-    { key = "quests", label = "Quest turn-ins", options = ON_OFF },
-    { key = "tiers", label = "Profession skill tiers", options = { { true, "At the guild's tiers" }, { false, "Off" } } },
-    { key = "toasts", label = "Pop-ups for guildmates", options = ON_OFF },
-    { key = "snapshot", label = "Keep data for the app", options = ON_OFF },
+    { key = "bosses", label = "Boss kills", tip = "Dungeon and raid bosses. Only the group leader says it, so it's said once.", options = ON_OFF },
+    { key = "deaths", label = "Deaths", tip = "Share your deaths (for the weekly Darwin Award). Off unless you want the fame.", options = ON_OFF },
+    { key = "quests", label = "Quest turn-ins", tip = "Every quest you hand in. Can get chatty.", options = ON_OFF },
+    { key = "tiers", label = "Profession skill tiers", tip = "When a profession reaches one of your guild's skill tiers.",
+      options = { { true, "At the guild's tiers" }, { false, "Off" } } },
+    { key = "toasts", label = "Pop-ups for guildmates", tip = "Small pop-ups when a guildmate levels, loots an epic or a boss falls.", options = ON_OFF },
+    { key = "minimap", label = "Minimap button", tip = "The GM button by your minimap. Drag it to move it.", options = ON_OFF,
+      set = function(v) ns.Set("minimap", v); if ns.UpdateMinimap then ns.UpdateMinimap() end end },
+    { key = "snapshot", label = "Keep data for the app", tip = "Saves the guild list for the officers' Discord app. Leave it on.", options = ON_OFF },
 }
+
+local function Tip(frame, title, text)
+    frame:SetScript("OnEnter", function(self)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(title, 1, 1, 1)
+        GameTooltip:AddLine(text, C.muted[1] + 0.2, C.muted[2] + 0.2, C.muted[3] + 0.2, true)
+        GameTooltip:Show()
+    end)
+    frame:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+end
 
 local function BuildSettings(page)
     local card = Card(page, "What you share")
@@ -431,7 +446,14 @@ local function BuildSettings(page)
         local y = -32 - (i - 1) * 28
         local label = Text(card, "GameFontHighlightSmall", C.text)
         label:SetPoint("TOPLEFT", 12, y - 4)
-        label:SetText(def.label)
+        label:SetText(def.label .. (def.tip and (" " .. MUTED_HEX .. "(?)|r") or ""))
+        if def.tip then                                       -- hover the row name for a one-line explanation
+            local hover = CreateFrame("Frame", nil, card)
+            hover:SetPoint("TOPLEFT", 8, y + 2)
+            hover:SetSize(220, 22)
+            hover:EnableMouse(true)
+            Tip(hover, def.label, def.tip)
+        end
         local get = def.get or function()
             local v = ns.S(def.key)
             if type(def.options[1][1]) == "boolean" then return v and true or false end
@@ -499,7 +521,7 @@ end
 -- ---------------------------------------------------- the frame itself
 local function BuildWindow()
     win = Box(UIParent, C.bg)
-    win:SetSize(680, 470)
+    win:SetSize(700, 530)
     win:SetPoint("CENTER")
     win:SetFrameStrata("HIGH")
     win:SetMovable(true)
@@ -700,6 +722,61 @@ function ns.OnMoment(kind, who, a, b, c)
     end
 end
 
+-- ------------------------------------------------------------------ minimap button
+local ICON_FILE = "Interface\\AddOns\\GuildMilestones\\Media\\icon"
+local mini
+
+local function PlaceMini()
+    local angle = math.rad(tonumber(ns.S("minimapAngle")) or 215)
+    local r = ((Minimap.GetWidth and Minimap:GetWidth()) or 140) / 2 + 8
+    mini:ClearAllPoints()
+    mini:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * r, math.sin(angle) * r)
+end
+
+local function BuildMinimapButton()
+    if not Minimap or mini then return end
+    mini = CreateFrame("Button", "GuildMilestonesMinimapButton", Minimap)
+    mini:SetSize(32, 32)
+    mini:SetFrameStrata("MEDIUM")
+    mini:SetFrameLevel(8)
+    mini:RegisterForClicks("AnyUp")
+    mini:RegisterForDrag("LeftButton")
+    local icon = mini:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture(ICON_FILE)
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER")
+    local border = mini:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetSize(52, 52)
+    border:SetPoint("TOPLEFT")
+    mini:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    mini:SetScript("OnClick", function(_, button)
+        if button == "RightButton" then ns.Open("settings") else ns.Toggle() end
+    end)
+    mini:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", function()
+            local mx, my = Minimap:GetCenter()
+            local px, py = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            local atan2 = math.atan2 or math.atan
+            ns.Set("minimapAngle", math.deg(atan2(py / scale - my, px / scale - mx)))
+            PlaceMini()
+        end)
+    end)
+    mini:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+    Tip(mini, "Guild Milestones", "Click: open the window.\nRight-click: settings.\nDrag: move this button.")
+    PlaceMini()
+end
+
+function ns.UpdateMinimap()
+    if ns.S("minimap") == false then
+        if mini then mini:Hide() end
+        return
+    end
+    BuildMinimapButton()
+    if mini then mini:Show() end
+end
+
 -- ------------------------------------------------------------------ Esc > Options entry
 local function BuildOptionsEntry()
     local panel = CreateFrame("Frame")
@@ -727,4 +804,16 @@ end
 
 function ns.BuildUI()
     pcall(BuildOptionsEntry)
+    local ok, err = pcall(ns.UpdateMinimap)
+    if not ok then ns.Say("couldn't add the minimap button: %s", tostring(err)) end
+end
+
+-- First time on this account: a friendly hello that shows where everything is.
+function ns.Welcome()
+    local db = GuildMilestonesDB
+    if db.welcomed then return end
+    db.welcomed = ns.VERSION
+    ns.Say("Welcome! Click the |cfff2b84bGM|r button by your minimap (or type |cfff2b84b/gms|r) to see your guild's race, "
+        .. "crafters and settings.")
+    ns.Toast(ICON_FILE, "Guild Milestones is ready", "Click GM by the minimap, or type /gms")
 end

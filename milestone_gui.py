@@ -2,7 +2,7 @@
 """Guild Milestones - companion app. Double-click GuildMilestones.pyw to run it."""
 import os, queue, subprocess, sys, threading, time
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import engine as E
 
@@ -17,10 +17,20 @@ FONT, FONT_S, FONT_B = (F, 10), (F, 9), (F + " Semibold", 10)
 FONT_H1, FONT_H2, FONT_BIG = (F + " Semibold", 18), (F + " Semibold", 12), (F + " Semibold", 22)
 
 
+def style_scrollbars(root):
+    """Thin dark scrollbars that match the app (the 'clam' theme lets us colour them)."""
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    st.configure("GM.Vertical.TScrollbar", background="#3a4152", troughcolor=BG, bordercolor=BG, lightcolor=CARD2,
+                 darkcolor="#3a4152", arrowcolor=MUTED, gripcount=0, arrowsize=11, width=11)
+    st.map("GM.Vertical.TScrollbar", background=[("active", HOVER), ("pressed", GOLD)])
+
+
 # ---------------------------------------------------------------- widgets
 class Btn(tk.Label):
     """A flat button. kind: primary (gold), ghost (dark), danger (red)."""
-    STYLES = {"primary": (GOLD, GOLD_HI, GOLD_INK), "ghost": (CARD2, HOVER, TEXT), "danger": (BAD, "#ff7878", "white")}
+    STYLES = {"primary": (GOLD, GOLD_HI, GOLD_INK), "ghost": (CARD2, HOVER, TEXT), "danger": (BAD, "#ff7878", "white"),
+              "update": ("#2f6fd6", "#4a86e8", "white")}
 
     def __init__(self, parent, text, command, kind="ghost", padx=14, pady=7, font=FONT_B):
         bg, hi, fg = self.STYLES[kind]
@@ -102,7 +112,7 @@ def label(parent, text, muted=False, font=None, wrap=640, **kw):
                     wraplength=wrap, justify="left", **kw)
 
 
-def toggle_row(parent, var, title, sub=None, title_font=FONT_B, pady=(10, 0)):
+def toggle_row(parent, var, title, sub=None, title_font=FONT_B, pady=(10, 0), command=None):
     """Text on the left (wrapping to fit), a switch on the right."""
     row = tk.Frame(parent, bg=parent["bg"])
     row.pack(fill="x", pady=pady)
@@ -112,7 +122,7 @@ def toggle_row(parent, var, title, sub=None, title_font=FONT_B, pady=(10, 0)):
         s = tk.Label(row, text=sub, bg=row["bg"], fg=MUTED, font=FONT_S, anchor="w", justify="left")
         s.grid(row=1, column=0, sticky="ew")
         row.bind("<Configure>", lambda e: s.configure(wraplength=max(120, e.width - 70)))
-    Toggle(row, var, bg=row["bg"]).grid(row=0, column=1, rowspan=2, sticky="ne", padx=(12, 0))
+    Toggle(row, var, bg=row["bg"], command=command).grid(row=0, column=1, rowspan=2, sticky="ne", padx=(12, 0))
     return row
 
 
@@ -121,12 +131,24 @@ class ScrollPage(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG)
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview, style="GM.Vertical.TScrollbar")
+        self.canvas.configure(yscrollcommand=self.bar.set)
         self.body = tk.Frame(self.canvas, bg=BG)
         self.win = self.canvas.create_window(0, 0, window=self.body, anchor="nw")
-        self.canvas.pack(fill="both", expand=True)
-        self.body.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.win, width=e.width))
+        self.bar.pack(side="right", fill="y", padx=(0, 4), pady=6)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.body.bind("<Configure>", lambda e: self._fit())
+        self.canvas.bind("<Configure>", lambda e: (self.canvas.itemconfigure(self.win, width=e.width), self._fit()))
         self.bind_all("<MouseWheel>", self._wheel, add="+")
+
+    def _fit(self):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        if self.body.winfo_reqheight() > self.canvas.winfo_height() + 2:       # only show the bar when it's needed
+            self.bar.state(["!disabled"])
+            self.bar.pack(side="right", fill="y", padx=(0, 4), pady=6, before=self.canvas)
+        else:
+            self.bar.pack_forget()
+            self.canvas.yview_moveto(0)
 
     def _wheel(self, e):
         if not self.winfo_ismapped():
@@ -141,12 +163,18 @@ NAV = [("home", "⌂", "Home"), ("discord", "✉", "Discord"), ("announce", "★
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, hidden=False):
         self.root, self.q, self.stop, self.running, self.latest, self.engine = root, queue.Queue(), None, False, None, None
+        self.tray, self.told_tray, self.last_alert = None, False, 0.0
         root.title(f"Guild Milestones {E.APP_VERSION}")
         root.geometry("1060x740")
         root.minsize(940, 640)
         root.configure(bg=BG)
+        try:
+            root.iconbitmap(default=str(E.ICON))
+        except Exception:
+            pass
+        style_scrollbars(root)
 
         cfg = E.load_config()
         self.s = {k: tk.StringVar(value=str(cfg[k])) for k in
@@ -155,7 +183,7 @@ class App:
         self.b = {k: tk.BooleanVar(value=bool(cfg[k])) for k in
                   ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new",
                    "welcome_back", "digest_enabled", "ladder_enabled", "shared_on", "skip_shouted", "event_loot", "event_boss",
-                   "event_death", "event_quest")}
+                   "event_death", "event_quest", "tray_on_close", "start_with_windows")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
         self.device_id = cfg["device_id"]
         self.tested = False
@@ -168,13 +196,60 @@ class App:
         self.refresh_addon()
         self.maybe_update_addon()
 
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.protocol("WM_DELETE_WINDOW", self.on_close_button)
+        self.start_tray()
         self.pump()
         self.set_running(False)
         self.tick()
         root.after(2000, lambda: self.check_update(False))
-        if cfg["auto_start"] and cfg["webhook"] and os.path.isdir(cfg["game_folder"]):
+        if hidden and self.tray:                                 # started with Windows: straight to the tray
+            root.withdraw()
             root.after(600, lambda: self.start(quiet=True))
+        elif cfg["auto_start"] and cfg["webhook"] and os.path.isdir(cfg["game_folder"]):
+            root.after(600, lambda: self.start(quiet=True))
+
+    # ------------------------------------------------------------ tray (the GM icon by the clock)
+    def start_tray(self):
+        try:
+            import tray
+            if not tray.supported() or not E.ICON.exists():
+                return
+            t = tray.Tray(E.ICON, "Guild Milestones", on_open=lambda: self.q.put(self.reveal),
+                          on_quit=lambda: self.q.put(self.close))
+            if t.start():
+                self.tray = t
+        except Exception as e:
+            E.log_error(f"tray failed: {e!r}")
+
+    def reveal(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def on_close_button(self):
+        """The window's X: keep watching from the tray (if that's switched on), otherwise quit."""
+        if self.tray and self.b["tray_on_close"].get() and self.running:
+            self.root.withdraw()
+            if not self.told_tray:
+                self.told_tray = True
+                self.tray.notify("Still watching your guild", "Guild Milestones keeps running here. "
+                                 "Click the GM icon to open it, or right-click it to quit.")
+            return
+        self.close()
+
+    def alert(self, text):
+        """A Windows notification when something breaks while the window is hidden (at most every 10 minutes)."""
+        if self.tray and not self.root.winfo_viewable() and time.time() - self.last_alert > 600:
+            self.last_alert = time.time()
+            self.tray.notify("Guild Milestones needs a look", text[:200], warning=True)
+
+    def toggle_startup(self):
+        prob = E.set_start_with_windows(self.b["start_with_windows"].get())
+        if prob:
+            self.b["start_with_windows"].set(False)
+            messagebox.showwarning("Start with Windows", prob)
+        else:
+            E.save_config(self.collect())
 
     # ------------------------------------------------------------ layout
     def build_shell(self):
@@ -210,11 +285,12 @@ class App:
 
         foot = tk.Frame(side, bg=SIDE)
         foot.pack(side="bottom", fill="x", padx=18, pady=18)
+        self.upd = Btn(foot, "⟳  Check for updates", lambda: self.check_update(True), "ghost", font=FONT_S)
+        self.upd.pack(fill="x", pady=(0, 12))                  # always visible, above the status line
         self.status_dot = tk.Label(foot, text="●  Not running", bg=SIDE, fg=MUTED, font=FONT_S, anchor="w")
         self.status_dot.pack(fill="x", pady=(0, 8))
         self.go = Btn(foot, "Start watching", self.toggle, "primary", pady=10)
         self.go.pack(fill="x")
-        self.upd = Btn(foot, "", self.do_update, "ghost")
 
         self.main = tk.Frame(self.root, bg=BG)
         self.main.pack(side="left", fill="both", expand=True)
@@ -288,18 +364,21 @@ class App:
 
         steps = card(p, "Get set up", "Four steps. Each one turns green when it's done.")
         steps.outer.pack(fill="x")
-        self.checks = {}
-        for key, text, go in (("discord", "Connect Discord (paste a webhook and send a test)", "discord"),
-                              ("folder", "Pick your WoW: Forever game folder", "game"),
-                              ("addon", "Install the addon into the game", "game"),
-                              ("file", "Log in once, then type /reload (so the app can read your guild)", "game")):
+        self.checks, self.check_btns = {}, {}
+        for key, text, btn, action in (
+                ("discord", "Connect Discord: paste a webhook and send a test", "Set up", lambda: self.show("discord")),
+                ("folder", "Pick your WoW: Forever game folder", "Find it", self.find),
+                ("addon", "Install the addon into the game", "Install", self.install_addon),
+                ("file", "Log in to WoW once, then type /reload", "How?", self.explain_file)):
             row = tk.Frame(steps, bg=CARD)
             row.pack(fill="x", pady=(10, 0))
             mark = tk.Label(row, text="○", bg=CARD, fg=DIM, font=(F, 13), width=2)
             mark.pack(side="left")
             tk.Label(row, text=text, bg=CARD, fg=TEXT, font=FONT).pack(side="left", padx=(6, 0))
-            Btn(row, "Open", lambda k=go: self.show(k), "ghost", padx=10, pady=3, font=FONT_S).pack(side="right")
+            b = Btn(row, btn, action, "ghost", padx=12, pady=3, font=FONT_S)
+            b.pack(side="right")
             self.checks[key] = mark
+            self.check_btns[key] = b
 
         self.boards_line = label(p, "", muted=True)
         self.boards_line.pack(anchor="w", pady=(14, 0))
@@ -460,10 +539,12 @@ class App:
 
         s = card(p, "This app")
         s.outer.pack(fill="x", pady=(14, 0))
-        r3 = tk.Frame(s, bg=CARD)
-        r3.pack(fill="x", pady=(8, 0))
-        Toggle(r3, self.b["auto_start"]).pack(side="right")
-        tk.Label(r3, text="Start watching automatically when I open the app", bg=CARD, fg=TEXT, font=FONT).pack(anchor="w")
+        toggle_row(s, self.b["auto_start"], "Start watching as soon as the app opens")
+        toggle_row(s, self.b["start_with_windows"], "Start with Windows",
+                   "Opens quietly in the tray (the GM icon by the clock) when you log in to your PC, and starts watching.",
+                   command=self.toggle_startup)
+        toggle_row(s, self.b["tray_on_close"], "Keep running in the tray when I close the window",
+                   "While it's watching, the X hides the window instead of stopping. Right-click the GM icon to quit.")
         r4 = tk.Frame(s, bg=CARD)
         r4.pack(fill="x", pady=(14, 0))
         tk.Label(r4, text=f"Version {E.APP_VERSION}", bg=CARD, fg=TEXT, font=FONT_B).pack(side="left")
@@ -527,8 +608,15 @@ class App:
         have, new = E.addon_status(c["game_folder"]) if folder_ok else (None, None)
         done = {"discord": not E.webhook_problem(c["webhook"]) and (self.tested or d["members"] > 0),
                 "folder": folder_ok, "addon": bool(have), "file": bool(folder_ok and E.resolve_savedvars(c))}
+        first = next((k for k in ("discord", "folder", "addon", "file") if not done[k]), None)
         for k, mark in self.checks.items():
             mark.configure(text="✓" if done[k] else "○", fg=GOOD if done[k] else DIM)
+            b = self.check_btns[k]                                # the next step to do gets the gold button
+            b.set_kind("primary" if k == first else "ghost")
+            if done[k]:
+                b.pack_forget()
+            elif not b.winfo_ismapped():
+                b.pack(side="right")
         todo = sum(1 for v in done.values() if not v)
         self.badge("home", str(todo) if todo else "")
         if self.running:
@@ -579,6 +667,8 @@ class App:
                 self.box.configure(state="disabled")
                 if tag == "bad" and getattr(self, "current", "") != "log":
                     self.badge("log", "!")
+                if tag == "bad":
+                    self.alert(msg.strip())
         except queue.Empty:
             pass
         self.root.after(200, self.pump)
@@ -676,6 +766,15 @@ class App:
                 w.bind("<Enter>", lambda e, r=row: r.configure(highlightbackground=GOLD))
                 w.bind("<Leave>", lambda e, r=row: r.configure(highlightbackground=BORDER))
         tk.Label(win, text="", bg=CARD).pack(pady=4)
+
+    def explain_file(self):
+        self.refresh_addon()
+        if E.resolve_savedvars(self.collect()):
+            return self.refresh_home()
+        messagebox.showinfo("One last step", "The app reads a small file the addon saves in your WoW folder.\n\n"
+                            "1. Start WoW and log in to a character in your guild.\n"
+                            "2. Type /reload in chat and press Enter.\n\n"
+                            "That's it. This step turns green on its own a few seconds later.")
 
     def use_folder(self, path):
         self.s["game_folder"].set(path)
@@ -857,14 +956,13 @@ class App:
 
     def show_update(self, latest):
         self.latest = latest
-        self.upd.set_kind("ghost", f"⬆  Update to v{latest}")
-        self.upd.pack(fill="x", pady=(8, 0))
+        self.upd.set_kind("update", f"⬆  Update to v{latest}")
+        self.upd.cmd = self.do_update
         self.log(f"A new version is available: v{latest}. Click the Update button on the left.")
+        if self.tray and not self.root.winfo_viewable():
+            self.tray.notify("Guild Milestones", f"Version {latest} is ready. Open the app and click Update.")
 
     def do_update(self):
-        if getattr(sys, "frozen", False):
-            return messagebox.showinfo("Use the .pyw version", "The .exe can't update itself.\nOpen GuildMilestones.pyw instead, "
-                                       "and updating becomes one click.")
         notes = E.latest_notes(self.latest)
         extra = f"\n\nWhat's new: {notes[:160]}" if notes else ""
         if not messagebox.askyesno("Update", f"Update to v{self.latest}?\n\nThe app will restart. Your settings are kept.{extra}"):
@@ -885,7 +983,8 @@ class App:
         self.log("Updated! Restarting...")
         self.root.withdraw()                                     # the old window disappears at once
         self.close(exit_now=False)                               # saves settings, hands over the announcer role
-        subprocess.Popen([sys.executable, str(E.APP_DIR / "GuildMilestones.pyw")], cwd=str(E.APP_DIR))
+        if not E.FROZEN:                                         # the .exe is restarted by its own helper script
+            subprocess.Popen([sys.executable, str(E.APP_DIR / "GuildMilestones.pyw")], cwd=str(E.APP_DIR))
         os._exit(0)                                              # hard stop, so no second window ever lingers
 
     def toggle(self):
@@ -921,6 +1020,9 @@ class App:
             t = threading.Thread(target=eng.release, daemon=True)
             t.start()
             t.join(4)
+        if self.tray:
+            self.tray.stop()
+            self.tray = None
         if exit_now:
             self.root.destroy()
 
@@ -933,7 +1035,7 @@ def main():
     except Exception:
         pass
     root = tk.Tk()
-    App(root)
+    App(root, hidden="--tray" in sys.argv)
     root.mainloop()
 
 

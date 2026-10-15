@@ -1,0 +1,21 @@
+# Tells CurseForge and Wago how to package the addon from this repo:
+# only the GuildMilestones folder goes in; the companion app and dev files stay out.
+package-as: GuildMilestones
+
+move-folders:
+  GuildMilestones/GuildMilestones: GuildMilestones
+
+ignore:
+  - engine.py
+  - milestone_gui.py
+  - tray.py
+  - GuildMilestones.pyw
+  - build_exe.bat
+  - assets
+  - shared
+  - dev
+  - .github
+  - README.md
+  - CHANGES.md
+  - HOW TO UPDATE.txt
+  - CLAUDE.md
