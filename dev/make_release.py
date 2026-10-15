@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = re.search(r'APP_VERSION = "([^"]+)"', (ROOT / "engine.py").read_text(encoding="utf-8")).group(1)
 KIT_FILES = ["GuildMilestones.pyw", "engine.py", "milestone_gui.py", "tray.py", "README.md", "CHANGES.md",
-             "HOW TO UPDATE.txt", "build_exe.bat"]
+             "HOW TO UPDATE.txt"]
 KIT_DIRS = ["GuildMilestones", "shared", "assets"]
 
 

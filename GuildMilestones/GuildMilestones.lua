@@ -1,4 +1,4 @@
--- Guild Milestones 0.10.0
+-- Guild Milestones 0.10.1
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.10.0"
+local VERSION = "0.10.1"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests

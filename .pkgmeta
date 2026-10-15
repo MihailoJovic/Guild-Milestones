@@ -10,7 +10,6 @@ ignore:
   - milestone_gui.py
   - tray.py
   - GuildMilestones.pyw
-  - build_exe.bat
   - assets
   - shared
   - dev

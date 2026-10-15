@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.10.1"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -1316,7 +1316,7 @@ def install_addon(game):
 
 # ------------------------------- updating from GitHub -------------------------------
 UPDATE_FILES = ("engine.py", "milestone_gui.py", "tray.py", "GuildMilestones.pyw", "README.md", "CHANGES.md",
-                "HOW TO UPDATE.txt", "build_exe.bat")
+                "HOW TO UPDATE.txt")
 UPDATE_DIRS = ("GuildMilestones", "shared", "assets")
 
 
@@ -1439,6 +1439,52 @@ def launch_command(tray=True):
         pyw = Path(sys.executable).with_name("pythonw.exe")
         cmd = f'"{pyw if pyw.exists() else sys.executable}" "{APP_DIR / 'GuildMilestones.pyw'}"'
     return cmd + (" --tray" if tray else "")
+
+
+def start_with_windows_on():
+    """True if Windows is set to start the app (so the switch shows the truth)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, "GuildMilestones")
+        return True
+    except Exception:
+        return False
+
+
+def download_exe(folder):
+    """Fetch GuildMilestones.exe from the newest GitHub release into folder. Returns (ok, path or problem)."""
+    try:
+        latest, url = latest_release()
+        if not url:
+            return False, "There's no GuildMilestones.exe on GitHub yet."
+        data = _fetch(url, timeout=120)
+        if len(data) < 1_000_000 or not data.startswith(b"MZ"):
+            return False, "The download didn't look like the app, so I didn't save it."
+        target = Path(folder) / RELEASE_EXE
+        tmp = target.with_suffix(".download")
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+        return True, str(target)
+    except PermissionError:
+        return False, "Windows wouldn't let me save into this folder. Move the app to Documents and try again."
+    except Exception as e:
+        return False, f"Couldn't download it: {e}"
+
+
+def make_shortcut(target, name="Guild Milestones"):
+    """Put a desktop shortcut to target. Returns '' or a problem."""
+    try:
+        import subprocess
+        target = Path(target)
+        ps = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\"
+              f"{name}.lnk');$s.TargetPath='{target}';$s.WorkingDirectory='{target.parent}';"
+              f"$s.IconLocation='{target},0';$s.Save()")
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                           capture_output=True, text=True, timeout=30, creationflags=0x08000000)
+        return "" if r.returncode == 0 else (r.stderr.strip()[:200] or "PowerShell refused.")
+    except Exception as e:
+        return f"Couldn't make the shortcut: {e}"
 
 
 def set_start_with_windows(on):

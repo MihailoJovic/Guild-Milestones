@@ -1,6 +1,8 @@
 @echo off
-REM Builds GuildMilestones.exe (one file, no Python needed to run it).
-REM Usually you don't need this: every GitHub release already has the .exe attached.
+REM FOR DEVELOPERS ONLY. You never need this to use the app:
+REM GitHub builds GuildMilestones.exe automatically for every release (see the Releases page).
+REM This just builds the same .exe on your own PC, into the dist folder.
+cd /d "%~dp0.."
 echo Installing the packaging tool (one time)...
 py -m pip install --user pyinstaller
 echo.

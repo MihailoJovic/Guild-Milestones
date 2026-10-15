@@ -1,0 +1,23 @@
+# Runs the tests every time something is pushed, so a broken change is caught before a release.
+name: Tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Versions in step
+        run: python dev/check_versions.py
+      - name: App compiles
+        run: python -m py_compile engine.py milestone_gui.py tray.py GuildMilestones.pyw
+      - name: App tests
+        run: python dev/test_engine.py
+      - name: Addon tests
+        run: |
+          python -m pip install lupa
+          python dev/run_lua_tests.py

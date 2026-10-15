@@ -1,7 +1,7 @@
 ## Interface: 16001, 120100
 ## Title: Guild Milestones
 ## Notes: Your guild's milestones: announcements in guild chat, a guild race, crafters and pop-ups, plus data for the Discord companion app. Type /gms.
-## Version: 0.10.0
+## Version: 0.10.1
 ## SavedVariables: GuildMilestonesDB
 ## IconTexture: Interface\AddOns\GuildMilestones\Media\icon
 ## AddonCompartmentFunc: GuildMilestones_OnCompartmentClick

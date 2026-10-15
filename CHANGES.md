@@ -1,5 +1,14 @@
 # What's new
 
+## v0.10.1
+**New Guild Milestones icon, tidier switches, and the .exe is one click away.**
+- The new GM banner icon is on the app, the tray, the desktop shortcut and the in-game minimap button.
+- Switches now line up with their text.
+- Running the Python version? Game & addon has a "Get the .exe version" button: it downloads the app and puts a shortcut on your desktop.
+- Running the .exe? There's a "Desktop shortcut" button.
+- "Start with Windows" always shows what Windows really does, and it's off unless you turn it on.
+- You never need to build anything: GitHub makes the .exe for every release. The build script moved to the dev folder.
+
 ## v0.10.0
 **Guild Milestones is now one .exe: no Python needed, and it lives by your clock.**
 - Download GuildMilestones.exe from GitHub and double-click it. That's the whole install. It updates itself, too.

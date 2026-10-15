@@ -2,6 +2,7 @@
 """Guild Milestones - companion app. Double-click GuildMilestones.pyw to run it."""
 import os, queue, subprocess, sys, threading, time
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import engine as E
@@ -122,7 +123,8 @@ def toggle_row(parent, var, title, sub=None, title_font=FONT_B, pady=(10, 0), co
         s = tk.Label(row, text=sub, bg=row["bg"], fg=MUTED, font=FONT_S, anchor="w", justify="left")
         s.grid(row=1, column=0, sticky="ew")
         row.bind("<Configure>", lambda e: s.configure(wraplength=max(120, e.width - 70)))
-    Toggle(row, var, bg=row["bg"], command=command).grid(row=0, column=1, rowspan=2, sticky="ne", padx=(12, 0))
+    # centred against the whole text block (title + description), not pinned to the top
+    Toggle(row, var, bg=row["bg"], command=command).grid(row=0, column=1, rowspan=2 if sub else 1, sticky="e", padx=(16, 0))
     return row
 
 
@@ -185,6 +187,7 @@ class App:
                    "welcome_back", "digest_enabled", "ladder_enabled", "shared_on", "skip_shouted", "event_loot", "event_boss",
                    "event_death", "event_quest", "tray_on_close", "start_with_windows")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
+        self.b["start_with_windows"].set(E.start_with_windows_on())   # the switch shows what Windows really does
         self.device_id = cfg["device_id"]
         self.tested = False
         self.log_lines = []
@@ -242,6 +245,33 @@ class App:
         if self.tray and not self.root.winfo_viewable() and time.time() - self.last_alert > 600:
             self.last_alert = time.time()
             self.tray.notify("Guild Milestones needs a look", text[:200], warning=True)
+
+    def make_shortcut(self):
+        prob = E.make_shortcut(Path(sys.executable))
+        if prob:
+            messagebox.showwarning("Desktop shortcut", prob)
+        else:
+            messagebox.showinfo("Desktop shortcut", "Done! \"Guild Milestones\" is on your desktop.")
+
+    def get_exe(self):
+        """For people running the .pyw: fetch the ready-made .exe from GitHub, put a shortcut on the desktop."""
+        if not messagebox.askyesno("Get the .exe version", "This downloads GuildMilestones.exe (the same app, no Python "
+                                   "needed) into this folder and puts a shortcut on your desktop. Your settings carry over."
+                                   "\n\nGo ahead?"):
+            return
+        self.log("Downloading GuildMilestones.exe from GitHub...")
+
+        def work():
+            ok, msg = E.download_exe(E.APP_DIR)
+            if ok:
+                prob = E.make_shortcut(Path(msg))
+                text = ("Done! Close this window and open \"Guild Milestones\" from your desktop from now on."
+                        + (f"\n\n(The shortcut didn't work: {prob}\nThe .exe is here: {msg})" if prob else ""))
+            else:
+                text = msg
+            self.log(text.splitlines()[0])
+            self.q.put(lambda: (messagebox.showinfo if ok else messagebox.showwarning)("Get the .exe version", text))
+        threading.Thread(target=work, daemon=True).start()
 
     def toggle_startup(self):
         prob = E.set_start_with_windows(self.b["start_with_windows"].get())
@@ -528,10 +558,7 @@ class App:
         self.addon_lbl.pack(side="left")
         self.addon_btn = Btn(row, "Install / update addon", self.install_addon, "ghost")
         self.addon_btn.pack(side="right")
-        r2 = tk.Frame(a, bg=CARD)
-        r2.pack(fill="x", pady=(12, 0))
-        Toggle(r2, self.b["auto_update_addon"]).pack(side="right")
-        tk.Label(r2, text="Keep the addon up to date when this app updates", bg=CARD, fg=TEXT, font=FONT).pack(anchor="w")
+        toggle_row(a, self.b["auto_update_addon"], "Keep the addon up to date when this app updates", pady=(14, 0))
         self.file_lbl = label(a, "", muted=True)
         self.file_lbl.pack(anchor="w", pady=(10, 0))
         label(a, "In game: /gms opens the Guild Milestones window. After the app changes settings, type /reload.",
@@ -547,8 +574,13 @@ class App:
                    "While it's watching, the X hides the window instead of stopping. Right-click the GM icon to quit.")
         r4 = tk.Frame(s, bg=CARD)
         r4.pack(fill="x", pady=(14, 0))
-        tk.Label(r4, text=f"Version {E.APP_VERSION}", bg=CARD, fg=TEXT, font=FONT_B).pack(side="left")
+        tk.Label(r4, text=f"Version {E.APP_VERSION}" + ("" if E.FROZEN else "  (running from Python)"),
+                 bg=CARD, fg=TEXT, font=FONT_B).pack(side="left")
         Btn(r4, "Check for updates", lambda: self.check_update(True), "ghost", font=FONT_S).pack(side="right")
+        if E.FROZEN:
+            Btn(r4, "Desktop shortcut", self.make_shortcut, "ghost", font=FONT_S).pack(side="right", padx=(0, 8))
+        else:                                                    # running the .pyw: offer the ready-made .exe
+            Btn(r4, "Get the .exe version", self.get_exe, "primary", font=FONT_S).pack(side="right", padx=(0, 8))
         self.upd_lbl = label(s, "Not checked yet.", muted=True)
         self.upd_lbl.pack(anchor="w", pady=(8, 0))
         label(s, f"Runs from: {E.APP_DIR}", muted=True).pack(anchor="w", pady=(4, 0))
