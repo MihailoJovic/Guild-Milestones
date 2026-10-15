@@ -3,6 +3,8 @@
 What we build next, in order. Ranked by how much it adds for a guild of ~20 friends on WoW: Forever,
 weighed against the work. Updated 2026-10-15 (after v0.10.1).
 
+**Status:** v0.11.0 shipped features 1, 2, 3, 4, 5, 7, 8, 9 and 10. Number 6 (raid night summary) was dropped.
+
 ## Top 10 features
 
 | # | Feature | Why it matters | Effort |

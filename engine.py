@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.10.1"
+APP_VERSION = "0.11.0"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -39,6 +39,18 @@ MAX_OUTBOX = 60           # announcements kept waiting when Discord can't be rea
 MAX_WELCOMES = 5          # more brand-new names than this at once = probably a roster hiccup, so stay quiet
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 TIER_NAMES = {75: "Journeyman", 150: "Expert", 225: "Artisan", 300: "Master"}
+# Raid attunements and dungeon keys. The codes must match ATTUNE in the addon (GuildMilestones.lua).
+ATTUNEMENTS = {"ony": "🐉 Onyxia's Lair", "mc": "🔥 Molten Core", "bwl": "🖤 Blackwing Lair",
+               "ubrs": "🗝️ Upper Blackrock Spire", "scholo": "💀 Scholomance", "brd": "⚒️ Shadowforge (BRD)"}
+RAID_KEYS = ("ony", "mc", "bwl")
+# What people can look for in the Groups tab. Codes must match LFG_OPTIONS in the addon (UI.lua).
+LFG_NAMES = {"rfc": "Ragefire Chasm", "wc": "Wailing Caverns", "dm": "Deadmines", "sfk": "Shadowfang Keep",
+             "bfd": "Blackfathom Deeps", "stocks": "Stockade", "gnomer": "Gnomeregan", "rfk": "Razorfen Kraul",
+             "sm": "Scarlet Monastery", "rfd": "Razorfen Downs", "ulda": "Uldaman", "zf": "Zul'Farrak",
+             "mara": "Maraudon", "st": "Sunken Temple", "brd": "Blackrock Depths", "lbrs": "Lower Blackrock Spire",
+             "ubrs": "Upper Blackrock Spire", "dire": "Dire Maul", "strat": "Stratholme", "scholo": "Scholomance",
+             "attune": "Attunement help", "quest": "Questing buddy", "elite": "Elite quests", "pvp": "PvP"}
+LFG_FRESH = 90 * 60       # a "looking for group" note shows for this long
 CLASS_NAMES = {"DEATHKNIGHT": "Death Knight", "DEMONHUNTER": "Demon Hunter"}
 CLASS_COLORS = {"DEATHKNIGHT": 0xC41E3A, "DEMONHUNTER": 0xA330C9, "DRUID": 0xFF7C0A, "EVOKER": 0x33937F,
                 "HUNTER": 0xAAD372, "MAGE": 0x3FC7EB, "MONK": 0x00FF98, "PALADIN": 0xF48CBA, "PRIEST": 0xFFFFFF,
@@ -54,6 +66,11 @@ DEFAULTS = {
     "event_loot": True, "event_boss": True, "event_death": False, "event_quest": False, "loot_min_quality": 3,
     "milestones": "10, 20, 30, 40, 50, 60", "max_level": 60, "tiers": "75, 150, 225, 300",
     "week_start": 0,
+    # v0.11: more boards and moments
+    "fame_enabled": True, "attune_enabled": True, "crafters_enabled": True, "lfg_enabled": True,
+    "event_mount": True, "event_attune": True, "recap": True,
+    "hardcore": False, "mvp_poll": True, "mvp_day": 4,
+    "goal_level": 0, "goal_date": "", "goal_raid": "mc", "goal_raid_count": 0,
     "level_msg": "🎉 Congrats **{name}** on hitting Level {level}!",
     "welcome_msg": "👋 Welcome to the guild, **{name}**! ({cls}, level {level})",
     "tips": "10=Tip: ask who in the guild crafts. Free help is the best help!\n"
@@ -189,10 +206,24 @@ def parse_file(path):
             events.append({"kind": p[0], "name": p[1], "ts": int(p[2]), "a": p[3], "b": p[4], "c": p[5]})
         except (IndexError, ValueError):
             pass
+    keys = {}                                   # attunements and dungeon keys: who -> ["mc", "ony", ...]
+    for row in _block(text, "keys"):
+        p = row.split("|")
+        if len(p) >= 2 and p[0]:
+            keys[p[0]] = [k for k in p[1].split(",") if k in ATTUNEMENTS]
+    lfg = []                                    # who is looking for a group (the addon's Groups tab)
+    for row in _block(text, "lfg"):
+        p = row.split("|")
+        try:
+            lfg.append({"name": p[0], "level": int(p[1]), "cls": p[2], "role": p[3],
+                        "wants": [w for w in p[4].split(",") if w], "ts": int(p[5])})
+        except (IndexError, ValueError):
+            pass
     m = re.search(r'\["updated"\]\s*=\s*(\d+)', text)
     updated = int(m.group(1)) if m else int(Path(path).stat().st_mtime)
     g = re.search(r'\["guild"\]\s*=\s*"((?:[^"\\\n]|\\.)*)"', text)
     return {"members": members, "profs": profs, "heard": heard, "events": events, "updated": updated,
+            "keys": keys, "lfg": lfg,
             "guild": g.group(1).replace('\\"', '"') if g else "",
             "legacy": '["entries"]' in text and not members}
 
@@ -214,12 +245,21 @@ def hook_key(url):
 
 def load_state():
     st = {"initialized": False, "members": {}, "firsts": {}, "profs": {}, "crafters": {},
-          "week": new_week(""), "digest": {}, "ladder": {}, "outbox": []}
+          "week": new_week(""), "boards": {}, "outbox": []}
     st.update(_read_json(STATE_FILE) or {})
-    for board in ("digest", "ladder"):                 # older versions stored the full webhook URL here
-        d = st.get(board) or {}
-        if d.get("url"):
-            d["hook"] = hook_key(d.pop("url"))
+    return migrate_boards(st)
+
+
+def migrate_boards(st):
+    """Board message ids live in st["boards"]. Before v0.11 the digest and race board sat at the top level,
+    and v0.8 even kept the full webhook URL there."""
+    boards = st.setdefault("boards", {})
+    for key in ("digest", "ladder"):
+        d = st.pop(key, None)
+        if isinstance(d, dict) and d:
+            if d.get("url"):
+                d["hook"] = hook_key(d.pop("url"))
+            boards.setdefault(key, d)
     return st
 
 
@@ -234,10 +274,54 @@ def _seed_firsts(st, cls, level, levels):
             st["firsts"].setdefault(f"class:{cls}:{m}", "")
 
 
+# ------------------------------ guild firsts, lifetime stats ------------------------------
+def add_fame(st, key, title, who, detail="", when="", seed=False):
+    """Record a guild first. Returns True only for a brand-new first (worth a post).
+    seed=True marks it as 'happened before records began', so a later achiever isn't called first."""
+    fame = st.setdefault("fame", {})
+    if key in fame:
+        return False
+    fame[key] = {"title": title, "who": "" if seed else who, "detail": detail, "when": when}
+    return not seed
+
+
+def fame_card(title, who, detail, color=0xF2B84B):
+    text = f"🏆 **Guild first!** {title}: **{who}**" + (f"\n{detail}" if detail else "")
+    return {"text": text, "color": color}
+
+
+def bump_stat(st, who, key, n=1):
+    s = st.setdefault("stats", {}).setdefault(who, {})
+    s[key] = s.get(key, 0) + n
+
+
+def build_recap(st, who, cls, cap, today):
+    """The 'road to the cap' card for someone who just made it."""
+    s = st.get("stats", {}).get(who, {})
+    rec = next((r for n, r in st.get("members", {}).items() if short(n) == who), {})
+    days = ""
+    try:
+        start = datetime.strptime(rec.get("first_seen", ""), "%Y-%m-%d").date()
+        days = (datetime.strptime(today, "%Y-%m-%d").date() - start).days
+    except ValueError:
+        pass
+    firsts = [f["title"] for f in st.get("fame", {}).values() if f.get("who") == who]
+    fields = [{"name": "Days on the road", "value": str(days) if days != "" else "?", "inline": True},
+              {"name": "Bosses defeated", "value": str(s.get("bosses", 0)), "inline": True},
+              {"name": "Epics looted", "value": str(s.get("epics", 0)), "inline": True},
+              {"name": "Quests done", "value": str(s.get("quests", 0)), "inline": True},
+              {"name": "Deaths", "value": str(s.get("deaths", 0)), "inline": True},
+              {"name": "Mount", "value": {2: "Epic 🦄", 1: "Yes 🐎"}.get(s.get("mount", 0), "Still walking"), "inline": True}]
+    if firsts:
+        fields.append({"name": "🥇 Guild firsts", "value": _clip(firsts, 900)})
+    return {"title": f"🏁 {who}'s road to {cap}", "text": f"**{who}** the {class_name(cls)} made it to the level cap. "
+            "Here's how the journey went:", "color": class_color(cls), "fields": fields}
+
+
 # ------------------------------ the brain ------------------------------
 def process(snap, state, cfg, now):
     """Compare the newest snapshot with what we remember. Returns (new_state, messages, notes)."""
-    st, msgs, notes = copy.deepcopy(state), [], []
+    st, msgs, notes = migrate_boards(copy.deepcopy(state)), [], []
     cap = int(cfg["max_level"])
     levels = nums(cfg["milestones"]) | {cap}
     tiers, tips = nums(cfg["tiers"]), parse_tips(cfg["tips"])
@@ -257,7 +341,8 @@ def process(snap, state, cfg, now):
 
     wid = week_id(now, cfg["week_start"])
     if st["week"].get("id") != wid:
-        st["week"], st["digest"] = new_week(wid), {}
+        st["week"] = new_week(wid)
+        st.setdefault("boards", {})["digest"] = {}              # a fresh digest message each week
         notes.append("A new week has started.")
     week = st["week"]
     for k, empty in (("quests", {}), ("deaths", {}), ("back", [])):
@@ -281,6 +366,8 @@ def process(snap, state, cfg, now):
         if rec is None:                                         # someone new
             st["members"][name] = {"level": level, "class": cls, "first_seen": today, "off": m.get("off", 0)}
             _seed_firsts(st, cls, level, levels)
+            if level >= cap:
+                add_fame(st, "cap", "", "", seed=True)
             if name not in quiet:
                 week["new"].append({"name": who, "cls": cname, "level": level})
                 if cfg["welcome_new"]:
@@ -336,6 +423,10 @@ def process(snap, state, cfg, now):
                         text = "\n".join([text] + extra)
                     if text:
                         msgs.append({"text": text, "color": class_color(cls)})
+                if top == cap:
+                    add_fame(st, "cap", f"First to level {cap}", who, when=today)
+                    if cfg.get("recap", True):
+                        msgs.append(build_recap(st, who, cls, cap, today))
         rec["level"] = level
 
     # professions: only announce for (member, profession) pairs we've already seen
@@ -351,6 +442,11 @@ def process(snap, state, cfg, now):
                 if cfg["announce_tiers"] and not (skip and (short(p["name"]).lower(), p["prof"].lower(), t) in heard_s):
                     msgs.append({"text": f"🔨 **{short(p['name'])}** reached **{label}** in {p['prof']}!",
                                  "color": class_color(cls_of.get(short(p["name"]).lower())), "silent": True})
+                if t == max(tiers) and add_fame(st, f"prof:{p['prof']}", f"First {label} {p['prof']}",
+                                                short(p["name"]), when=today) and cfg.get("fame_enabled", True):
+                    msgs.append(fame_card(f"First {label} {p['prof']}", short(p["name"]), ""))
+        elif old is None and tiers and p["skill"] >= max(tiers):
+            add_fame(st, f"prof:{p['prof']}", "", "", seed=True)          # already maxed before we started
         mine[p["prof"]] = p["skill"]
 
     if snap["profs"]:
@@ -358,6 +454,27 @@ def process(snap, state, cfg, now):
         for p in snap["profs"]:
             crafters.setdefault(p["prof"], []).append([short(p["name"]), p["skill"]])
         st["crafters"] = {k: sorted(v, key=lambda r: -r[1]) for k, v in crafters.items()}
+
+    # attunements and keys: only announce what's new since we last looked at that person
+    known = st.setdefault("keys", {})
+    for who, have in (snap.get("keys") or {}).items():
+        who = short(who)
+        before = known.get(who)
+        known[who] = sorted(set(have) | set(before or []))
+        if before is None or not st["initialized"]:
+            for k in have:
+                add_fame(st, f"attune:{k}", "", "", seed=True)
+            continue
+        for k in sorted(set(have) - set(before)):
+            label = ATTUNEMENTS.get(k, k)
+            first = add_fame(st, f"attune:{k}", f"First attuned: {label}", who, when=today)
+            if first and cfg.get("fame_enabled", True):
+                msgs.append(fame_card(f"First attuned to {label}", who, ""))
+            elif cfg.get("event_attune", True):
+                msgs.append({"text": f"🔑 **{who}** is attuned: {label}", "color": class_color(cls_of.get(who.lower())),
+                             "silent": True})
+
+    st["lfg"] = [x for x in snap.get("lfg", []) if snap.get("updated", 0) - x["ts"] < LFG_FRESH]
 
     msgs.extend(event_items(snap.get("events", []), st, cfg, cls_of))
 
@@ -414,18 +531,48 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         seen_set.add(key)
         who, color = short(ev["name"]), class_color(cls_of.get(short(ev["name"]).lower()))
         kind = ev["kind"]
+        when = datetime.fromtimestamp(ev["ts"]).strftime("%Y-%m-%d") if ev["ts"] > 0 else ""
         if kind == "I":
             try:
-                if int(ev["b"].split(":")[0]) >= 3:
+                q = int(ev["b"].split(":")[0])
+                if q >= 3:
                     bump("loot", who)
+                if q >= 4:
+                    bump_stat(st, who, "epics")
+                    name = ev["c"] or f"item {ev['a']}"
+                    if add_fame(st, "epic", "First epic item", who, name, when) and cfg.get("fame_enabled", True):
+                        items.append(fame_card("First epic item", who, f"**{name}**", QUALITY_COLORS[4]))
+                if q >= 5 and add_fame(st, "legendary", "First legendary", who, ev["c"], when) and cfg.get("fame_enabled", True):
+                    items.append(fame_card("First legendary", who, f"**{ev['c']}**", QUALITY_COLORS[5]))
             except ValueError:
                 pass
         elif kind == "B":
             bump("boss", who)
+            bump_stat(st, who, "bosses")
         elif kind == "Q":
             bump("quests", who)
+            bump_stat(st, who, "quests")
         elif kind == "D":
             bump("deaths", who)
+            bump_stat(st, who, "deaths")
+            fallen = st.setdefault("fallen", [])
+            fallen.append({"name": who, "level": ev["b"], "zone": ev["a"] or "the wilds", "ts": ev["ts"]})
+            del fallen[:-50]
+        elif kind == "M":                                  # mounts: a = "mount" (normal) or "epic"
+            epic = ev["a"] == "epic"
+            have = st.get("stats", {}).get(who, {}).get("mount", 0)
+            if (2 if epic else 1) <= have:
+                continue                                   # already celebrated
+            st.setdefault("stats", {}).setdefault(who, {})["mount"] = 2 if epic else 1
+            first = add_fame(st, "epicmount" if epic else "mount", "First epic mount" if epic else "First mount", who,
+                             when=when)
+            if cfg.get("event_mount", True):
+                text = (f"🦄 **{who}** is riding an **epic mount**! Fast, shiny and very expensive." if epic else
+                        f"🐎 **{who}** got their **first mount**! No more walking.")
+                if first and cfg.get("fame_enabled", True):
+                    text += f"\n🥇 First in the guild!"
+                items.append({"text": text, "color": color})
+            continue
         if kind == "B":
             k = kills.setdefault(ev["a"], {"names": [], "ts": ev["ts"], "size": ev["b"], "color": color})
             if who not in k["names"]:
@@ -448,6 +595,10 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
             if info.get("icon"):
                 item["thumb"] = info["icon"]
             items.append(item)
+        elif kind == "D" and cfg.get("hardcore", False):          # Hardcore: a death is final, so a proper farewell
+            lvl = f", level {ev['b']}" if str(ev["b"]).isdigit() else ""
+            items.append({"text": f"🪦 **{who}**{lvl} has fallen in {ev['a'] or 'the wilds'}.\nRest well, hero. "
+                                  "Your name goes on the Fallen Heroes wall.", "color": 0x4B5563})
         elif kind == "D" and cfg.get("event_death", False):
             items.append({"text": f"💀 **{who}** has died in {ev['a'] or 'the wilds'}.", "color": color, "silent": True})
         elif kind == "Q" and cfg.get("event_quest", False):
@@ -464,7 +615,10 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         names = k["names"]
         crew = ", ".join(f"**{n}**" for n in names[:-1]) + f" and **{names[-1]}**" if len(names) > 1 else f"**{names[0]}**"
         size = f" (group of {k['size']})" if str(k["size"]).isdigit() and int(k["size"]) > len(names) else ""
-        items.append({"text": f"⚔️ **{boss}** is down! Defeated by {crew}{size}.", "color": k["color"]})
+        first = add_fame(st, f"boss:{boss}", f"First kill: {boss}", ", ".join(names),
+                         when=datetime.fromtimestamp(k["ts"]).strftime("%Y-%m-%d"))
+        extra = "\n🥇 **Guild first kill!**" if first and cfg.get("fame_enabled", True) else ""
+        items.append({"text": f"⚔️ **{boss}** is down! Defeated by {crew}{size}.{extra}", "color": k["color"]})
     cutoff = max([0] + [k["ts"] for k in kills.values()]) - 86400
     st["boss_posted"] = {b: t for b, t in posted.items() if t >= cutoff}
     st["events_seen"] = (list(seen) + [k for k in keys if k not in set(seen)])[-500:]
@@ -512,6 +666,10 @@ def build_digest(st, cfg):
     ms = [f"• **{m['name']}** → Level {m['level']}" for m in w["milestones"][-10:]]
     fields.append({"name": "🎯 Milestones hit", "value": _clip(ms, 600) or "*None yet this week.*"})
 
+    goals = [f"{progress_bar(g['have'], g['need'], 8)} **{g['title'][8:]}** · {g['text']}" for g in guild_goals(st, cfg)]
+    if goals:
+        fields.append({"name": "🎯 Guild goals", "value": _clip(goals, 900)})
+
     back = [f"• **{b['name']}** after {b['days']} days" for b in w.get("back", [])[-8:]]
     if back:
         fields.append({"name": "👋 Welcome back", "value": _clip(back, 400)})
@@ -526,7 +684,8 @@ def build_digest(st, cfg):
         tr = [f"• **{t['name']}** · {t['tier']} {t['prof']}" for t in w["tiers"][-8:]]
         fields.append({"name": "🔨 Skill tiers", "value": _clip(tr, 600) or "*None yet this week.*"})
 
-    for prof, rows in sorted(st["crafters"].items(), key=lambda kv: -len(kv[1]))[:9]:
+    crafters_here = {} if cfg.get("crafters_enabled", True) else st["crafters"]   # they have their own board now
+    for prof, rows in sorted(crafters_here.items(), key=lambda kv: -len(kv[1]))[:9]:
         line = " · ".join(f"{n} {s}" for n, s in rows[:8])
         if len(rows) > 8:
             line += f" · +{len(rows) - 8} more"
@@ -596,12 +755,19 @@ def _with_query(url, extra):
     return url + ("&" if "?" in url else "?") + extra
 
 
-def post(url, content=None, embed=None, wait=False, embeds=None, silent=False):
+BOT_NAME = "Guild Milestones"
+BOT_AVATAR = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/assets/gm.png"
+
+
+def post(url, content=None, embed=None, wait=False, embeds=None, silent=False, poll=None):
     """Returns (ok, message_id, error)."""
     if content:
         payload = {"content": content}
+    elif poll:
+        payload = {"poll": poll}
     else:
         payload = {"embeds": embeds if embeds is not None else [embed]}
+    payload["username"], payload["avatar_url"] = BOT_NAME, BOT_AVATAR   # same name and icon, whatever the webhook is called
     payload["allowed_mentions"] = {"parse": []}            # never ping @everyone or roles by accident
     if silent:
         payload["flags"] = SILENT
@@ -627,7 +793,7 @@ def _push_board(st, key, url, embed, force=False):
     """Keep one self-updating message (the digest or the race board). Returns (ok, what happened)."""
     stable = {k: v for k, v in embed.items() if k != "timestamp"}
     h = hashlib.md5(json.dumps(stable, sort_keys=True).encode()).hexdigest()
-    d = st.setdefault(key, {})
+    d = st.setdefault("boards", {}).setdefault(key, {})
     same_target = d.get("id") and d.get("hook") == hook_key(url)
     if same_target and d.get("hash") == h and not force:
         return True, "unchanged"
@@ -640,7 +806,7 @@ def _push_board(st, key, url, embed, force=False):
             return False, f"edit failed ({err or 'HTTP %s' % status})"
     ok, mid, err = post(url, embed=embed, wait=True, silent=True)
     if ok and mid:
-        st[key] = {"id": mid, "hook": hook_key(url), "hash": h}
+        st["boards"][key] = {"id": mid, "hook": hook_key(url), "hash": h}
         return True, "posted"
     return False, err or "no message id came back"
 
@@ -650,14 +816,11 @@ def board_url(cfg):
 
 
 def push_digest(st, cfg, force=False):
-    return _push_board(st, "digest", board_url(cfg), build_digest(st, cfg), force)
+    return push_board(st, cfg, "digest", force)
 
 
 def push_ladder(st, cfg, force=False):
-    embed = build_ladder(st, cfg)
-    if embed is None:
-        return True, "unchanged"
-    return _push_board(st, "ladder", board_url(cfg), embed, force)
+    return push_board(st, cfg, "ladder", force)
 
 
 def chunk(msgs, per_post=8, limit=5000):
@@ -686,6 +849,8 @@ def to_embeds(items):
             em["url"] = it["url"]
         if it.get("thumb"):
             em["thumbnail"] = {"url": it["thumb"]}
+        if it.get("fields"):
+            em["fields"] = it["fields"][:25]
         out.append(em)
     return out
 
@@ -719,6 +884,18 @@ def sample_posts(cfg):
         {"text": fmt(cfg.get("level_msg", DEFAULTS["level_msg"]), name="Jaina", level=20, cls="Mage")
                  + "\n🥇 First in the guild to hit 20!\n💡 Tip: shout in guild chat for a dungeon group." + tag, "color": c("MAGE")},
         {"text": "🏆 **Arthas** hit the level cap: **Level 60**! Absolute legend." + tag, "color": c("PALADIN")},
+        {"title": "🏁 Arthas's road to 60", "text": "**Arthas** the Paladin made it to the level cap. "
+         "Here's how the journey went:" + tag, "color": c("PALADIN"),
+         "fields": [{"name": "Days on the road", "value": "23", "inline": True},
+                    {"name": "Bosses defeated", "value": "41", "inline": True},
+                    {"name": "Epics looted", "value": "2", "inline": True},
+                    {"name": "Quests done", "value": "312", "inline": True},
+                    {"name": "Deaths", "value": "9", "inline": True},
+                    {"name": "Mount", "value": "Yes 🐎", "inline": True},
+                    {"name": "🥇 Guild firsts", "value": "First to level 60\nFirst kill: Onyxia"}]},
+        {"text": "🐎 **Jaina** got their **first mount**! No more walking.\n🥇 First in the guild!" + tag, "color": c("MAGE")},
+        {"text": "🏆 **Guild first!** First attuned to 🔥 Molten Core: **Arthas**" + tag, "color": 0xF2B84B},
+        {"text": "🔑 **Thrall** is attuned: 🐉 Onyxia's Lair" + tag, "color": c("SHAMAN"), "silent": True},
         {"text": "🔨 **Sylvanas** reached **Artisan (225)** in Tailoring!" + tag, "color": c("HUNTER"), "silent": True},
         {"text": "**Varian** looted **Thunderfury, Blessed Blade of the Windseeker**\nLegendary · item level 80" + tag,
          "color": QUALITY_COLORS[5], "title": "Thunderfury, Blessed Blade of the Windseeker",
@@ -747,7 +924,18 @@ def sample_state(cfg):
     w["loot"], w["boss"] = {"Varian": 3, "Jaina": 2}, {"Arthas": 4, "Varian": 4, "Jaina": 3}
     w["quests"], w["deaths"] = {"Thrall": 31, "Jaina": 18}, {"Jaina": 3, "Valeera": 1}
     w["back"] = [{"name": "Uther", "days": 21}]
-    st["crafters"] = {"Tailoring": [["Sylvanas", 225], ["Jaina", 150]], "Blacksmithing": [["Varian", 210]]}
+    st["crafters"] = {"Tailoring": [["Sylvanas", 225], ["Jaina", 150]], "Blacksmithing": [["Varian", 210]],
+                      "Alchemy": [["Thrall", 180]]}
+    st["fame"] = {"cap": {"title": "First to level 60", "who": "Arthas", "when": "2026-11-20"},
+                  "mount": {"title": "First mount", "who": "Jaina", "when": "2026-11-15"},
+                  "epic": {"title": "First epic item", "who": "Varian", "detail": "Hand of Ragnaros", "when": "2026-11-22"},
+                  "boss:Onyxia": {"title": "First kill: Onyxia", "who": "Arthas, Varian, Jaina", "when": "2026-11-25"},
+                  "attune:mc": {"title": "First attuned: 🔥 Molten Core", "who": "Arthas", "when": "2026-11-24"}}
+    st["keys"] = {"Arthas": ["ony", "mc", "ubrs"], "Varian": ["ony"], "Thrall": ["ony", "brd"], "Jaina": ["mc"]}
+    now = int(time.time())
+    st["lfg"] = [{"name": "Thrall", "level": 44, "cls": "SHAMAN", "role": "Healer", "wants": ["zf", "mara"], "ts": now - 600},
+                 {"name": "Valeera", "level": 12, "cls": "ROGUE", "role": "DPS", "wants": ["dm"], "ts": now - 1500}]
+    st["fallen"] = [{"name": "Uther", "level": "27", "zone": "Stranglethorn Vale", "ts": now - 86400}]
     return st
 
 
@@ -761,11 +949,22 @@ def send_samples(cfg, log):
             log(f"Example posts failed: {err}")
             return False
         _sleep(1.2)
+    poll = mvp_poll_due({"week": sample_state(cfg)["week"]}, dict(cfg, mvp_poll=True, mvp_day=datetime.now().weekday()),
+                        datetime.now().replace(hour=19))
+    if poll:
+        poll["question"]["text"] = "🧪 Example: " + poll["question"]["text"]
+        ok, _, err = post(cfg["webhook"], poll=poll)
+        log("Example MVP vote sent." if ok else f"Example MVP vote failed: {err}")
+        _sleep(1.2)
     log("Example feed posts sent.")
     st = sample_state(cfg)
-    for label, embed in (("digest", build_digest(st, cfg)), ("race board", build_ladder(st, cfg))):
+    sample_cfg = dict(cfg, goal_level=cfg.get("goal_level") or 40, goal_date=cfg.get("goal_date") or "2026-12-09",
+                      goal_raid_count=cfg.get("goal_raid_count") or 10)
+    for key, builder, _ in BOARDS:
+        embed = builder(st, sample_cfg)
+        label = key
         embed["title"] = "🧪 " + embed["title"]
-        embed["description"] = "Example with made-up names. The real one appears once the app has watched your guild."
+        embed["footer"] = {"text": "Example with made-up names. The real board appears once the app has watched your guild."}
         ok, _, err = post(board_url(cfg), embed=embed, silent=True)
         if not ok:
             log(f"Example {label} failed: {err}")
@@ -794,11 +993,213 @@ def dashboard(cfg):
         "levels_week": sum(g[0] for g in (w.get("gains") or {}).values()),
         "milestones_week": len(w.get("milestones") or []),
         "waiting": len(st.get("outbox") or []),
-        "digest": bool((st.get("digest") or {}).get("id")),
-        "ladder": bool((st.get("ladder") or {}).get("id")),
+        "digest": bool((st.get("boards", {}).get("digest") or {}).get("id")),
+        "ladder": bool((st.get("boards", {}).get("ladder") or {}).get("id")),
         "last_check": st.get("last_check"),
         "guild": st.get("guild") or "",
     }
+
+
+# ------------------------------ more boards ------------------------------
+def _stamp(embed):
+    embed["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return embed
+
+
+def build_fame(st, cfg):
+    """Hall of Fame: every guild first, oldest first."""
+    rows = [f for f in st.get("fame", {}).values() if f.get("who")]
+    if not rows:
+        return _stamp({"title": "🏆 Hall of Fame", "color": 0xF2B84B,
+                       "description": "Guild firsts land here: first to the level cap, first mount, first epic, "
+                                      "first boss kills, first attunements and maxed professions. Who'll be first?"})
+    rows.sort(key=lambda f: (f.get("when") or "", f["title"]))
+    lines = [f"**{f['title']}** · {f['who']}" + (f" · *{f['detail']}*" if f.get("detail") else "") for f in rows]
+    return _stamp({"title": "🏆 Hall of Fame", "color": 0xF2B84B, "description": _clip(lines, 3900),
+                   "footer": {"text": f"{len(rows)} guild firsts so far"}})
+
+
+def build_attune(st, cfg):
+    """Who's ready for which raid, and who holds which key."""
+    keys = st.get("keys", {})
+    fields = []
+    for code, label in ATTUNEMENTS.items():
+        names = sorted(w for w, ks in keys.items() if code in ks)
+        value = ", ".join(names) if names else "*Nobody yet*"
+        fields.append({"name": f"{label} ({len(names)})", "value": value[:1024], "inline": code not in RAID_KEYS})
+    desc = ("Updates when people log out or /reload with the addon on. Raids open on 9 December."
+            if keys else "Nobody's addon has reported yet. Attunements show up after people log in with the addon.")
+    return _stamp({"title": "🔑 Attunements & keys", "color": 0xE25822, "description": desc, "fields": fields})
+
+
+def build_crafters_board(st, cfg):
+    crafters = st.get("crafters", {})
+    if not crafters:
+        return _stamp({"title": "🧰 Crafters", "color": 0x3CCF8E,
+                       "description": "Who crafts what shows up here once an officer opens the guild's professions in game."})
+    fields = []
+    for prof, rows in sorted(crafters.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:24]:
+        line = " · ".join(f"{n} **{s}**" for n, s in rows[:10])
+        if len(rows) > 10:
+            line += f" · +{len(rows) - 10} more"
+        fields.append({"name": f"{prof} ({len(rows)})", "value": line[:1024], "inline": True})
+    return _stamp({"title": "🧰 Crafters", "color": 0x3CCF8E, "fields": fields,
+                   "description": "Need something made? Whisper the highest skill. In game: /gms → Crafters."})
+
+
+def build_lfg(st, cfg):
+    rows = st.get("lfg", [])
+    if not rows:
+        return _stamp({"title": "🧭 Looking for group", "color": 0x5AA9FF,
+                       "description": "Nobody's looking right now. In game, open /gms → Groups and tick what you'd like "
+                                      "to do. It shows up here for an hour and a half. No pings, ever."})
+    lines = []
+    for r in sorted(rows, key=lambda r: -r["ts"])[:20]:
+        wants = ", ".join(LFG_NAMES.get(w, w) for w in r["wants"]) or "anything"
+        lines.append(f"**{r['name']}** · {r['level']} {class_name(r['cls'])} · *{r['role']}* → {wants} · <t:{r['ts']}:R>")
+    return _stamp({"title": "🧭 Looking for group", "color": 0x5AA9FF, "description": _clip(lines, 3900),
+                   "footer": {"text": "Want in? Whisper them in game."}})
+
+
+def build_fallen(st, cfg):
+    rows = st.get("fallen", [])
+    if not rows:
+        return _stamp({"title": "🪦 Fallen Heroes", "color": 0x4B5563,
+                       "description": "No one has fallen. Long may it last."})
+    lines = [f"**{r['name']}**" + (f", level {r['level']}" if str(r["level"]).isdigit() else "") +
+             f" · {r['zone']} · <t:{r['ts']}:D>" for r in reversed(rows)]
+    return _stamp({"title": "🪦 Fallen Heroes", "color": 0x4B5563, "description": _clip(lines, 3900),
+                   "footer": {"text": f"{len(rows)} fallen. Remember them."}})
+
+
+# The boards channel, top to bottom. (key, builder, setting that switches it on)
+BOARDS = [("ladder", lambda st, cfg: build_ladder(st, cfg), "ladder_enabled"),
+          ("fame", build_fame, "fame_enabled"),
+          ("attune", build_attune, "attune_enabled"),
+          ("crafters", build_crafters_board, "crafters_enabled"),
+          ("lfg", build_lfg, "lfg_enabled"),
+          ("fallen", build_fallen, "hardcore"),
+          ("digest", build_digest, "digest_enabled")]
+
+
+def push_board(st, cfg, key, force=False):
+    builder = dict((k, b) for k, b, _ in BOARDS)[key]
+    embed = builder(st, cfg)
+    if embed is None:
+        return True, "unchanged"
+    return _push_board(st, key, board_url(cfg), embed, force)
+
+
+def delete_message(url, message_id):
+    base, _, query = url.partition("?")
+    target = f"{base}/messages/{message_id}"
+    thread = [q for q in query.split("&") if q.startswith("thread_id=")]
+    if thread:
+        target = _with_query(target, thread[0])
+    return _request("DELETE", target)[0]
+
+
+def tidy_boards(st, cfg, log):
+    """Delete every board message this app made, then post them again in the right order.
+    Use it after changing which boards are on, or if the boards channel got out of order."""
+    url = board_url(cfg)
+    for key, _, _ in BOARDS:
+        d = st.setdefault("boards", {}).get(key) or {}
+        if d.get("id") and d.get("hook") == hook_key(url):
+            delete_message(url, d["id"])
+            _sleep(0.6)
+        st["boards"][key] = {}
+    ok_all = True
+    for key, _, flag in BOARDS:
+        if not cfg.get(flag, key != "fallen"):
+            continue
+        ok, what = push_board(st, cfg, key, force=True)
+        log(f"{key.title()} board {what}." if ok else f"{key.title()} board problem: {what}")
+        ok_all = ok_all and ok
+        _sleep(1.0)
+    return ok_all
+
+
+# ------------------------------ the weekly MVP vote ------------------------------
+def mvp_candidates(w):
+    """Up to five people with a reason each, from this week's numbers."""
+    picks, seen = [], set()
+
+    def add(name, why):
+        if name and name not in seen and len(picks) < 5:
+            seen.add(name)
+            picks.append(f"{name} · {why}"[:55])
+    for n, (g, lvl) in sorted(w.get("gains", {}).items(), key=lambda kv: -kv[1][0])[:2]:
+        add(n, f"+{g} levels")
+    for cat, unit in (("boss", "boss kills"), ("loot", "rare+ drops"), ("quests", "quests")):
+        top = sorted(w.get(cat, {}).items(), key=lambda kv: -kv[1])[:2]
+        for n, c in top:
+            add(n, f"{c} {unit}")
+    for m in reversed(w.get("milestones", [])):
+        add(m["name"], f"hit level {m['level']}")
+    return picks
+
+
+def mvp_poll_due(st, cfg, now):
+    """The poll goes out once a week, on the chosen day from 18:00."""
+    if not cfg.get("mvp_poll", True):
+        return None
+    w = st.get("week") or {}
+    if w.get("poll") or now.weekday() != int(cfg.get("mvp_day", 4)) or now.hour < 18:
+        return None
+    picks = mvp_candidates(w)
+    if len(picks) < 2:
+        return None
+    return {"question": {"text": "🏅 Who's this week's guild MVP?"},
+            "answers": [{"poll_media": {"text": p}} for p in picks],
+            "duration": 48, "allow_multiselect": False}
+
+
+# ------------------------------ guild goals ------------------------------
+def progress_bar(have, need, width=10):
+    filled = min(width, round(width * have / need)) if need else 0
+    return "🟩" * filled + "⬛" * (width - filled)
+
+
+def goal_date(cfg):
+    try:
+        return datetime.strptime(str(cfg.get("goal_date", "")).strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def guild_goals(st, cfg, members=None):
+    """The goals the officers set: [{title, have, need, text}]. Members = [(name, level, class)] (active only)."""
+    if members is None:
+        members = [(short(n), r.get("level", 0), r.get("class", "")) for n, r in st.get("members", {}).items()
+                   if r.get("off", 0) <= 30]
+    out = []
+    try:
+        lvl = int(cfg.get("goal_level") or 0)
+    except (TypeError, ValueError):
+        lvl = 0
+    when = goal_date(cfg)
+    by = f" by {when.strftime('%b')} {when.day}" if when else ""
+    left = ""
+    if when:
+        days = (when - datetime.now().date()).days
+        left = f" · {days} day{'s' if days != 1 else ''} left" if days >= 0 else " · deadline passed"
+    if lvl > 0 and members:
+        have = sum(1 for m in members if m[1] >= lvl)
+        behind = sorted((m for m in members if m[1] < lvl), key=lambda m: -m[1])[:4]
+        tail = (" · next up: " + ", ".join(f"{m[0]} ({m[1]})" for m in behind)) if behind else " · 🎉 everyone's there!"
+        out.append({"title": f"🎯 Goal: everyone to level {lvl}{by}", "have": have, "need": len(members),
+                    "text": f"{have}/{len(members)} there{left}{tail}"})
+    try:
+        cnt = int(cfg.get("goal_raid_count") or 0)
+    except (TypeError, ValueError):
+        cnt = 0
+    raid = cfg.get("goal_raid", "mc")
+    if cnt > 0 and raid in ATTUNEMENTS:
+        have = sum(1 for ks in st.get("keys", {}).values() if raid in ks)
+        out.append({"title": f"🎯 Goal: {cnt} attuned to {ATTUNEMENTS[raid]}{by}", "have": min(have, cnt), "need": cnt,
+                    "text": f"{have}/{cnt} attuned{left}"})
+    return out
 
 
 # ------------------------------ the race to the level cap ------------------------------
@@ -835,8 +1236,10 @@ def build_ladder(st, cfg, rows=15):
     fields = [{"name": "🧗 The ladder", "value": "\n".join(lines)[:1024]}]
     if firsts:
         fields.append({"name": "First in the guild", "value": " · ".join(firsts)[:1024]})
-    fields.append({"name": "Guild goal: everyone to " + str(cap),
+    fields.append({"name": "Guild progress: everyone to " + str(cap),
                    "value": f"{bar}\n{total:,} of {goal:,} levels · {at_cap}/{len(members)} at {cap}"})
+    for g in guild_goals(st, cfg, members):
+        fields.append({"name": g["title"], "value": f"{progress_bar(g['have'], g['need'])}\n{g['text']}"})
     return {
         "title": f"🏁 Race to {cap}",
         "description": "This board updates itself. Climb it!",
@@ -881,7 +1284,13 @@ def addon_line(cfg):
         cap = int(cfg.get("max_level") or 0)
     except (TypeError, ValueError):
         cap = 0
-    return f"[GMS L={clean(cfg.get('milestones', ''))} C={cap} T={clean(cfg.get('tiers', ''))}]"
+    try:
+        goal = int(cfg.get("goal_level") or 0)
+    except (TypeError, ValueError):
+        goal = 0
+    when = goal_date(cfg)
+    extra = (f" G={goal}" + (f" D={when:%Y%m%d}" if when else "")) if goal > 0 else ""
+    return f"[GMS L={clean(cfg.get('milestones', ''))} C={cap} T={clean(cfg.get('tiers', ''))}{extra}]"
 
 
 def write_week_file(cfg, st):
@@ -903,11 +1312,12 @@ def write_week_file(cfg, st):
             return True                                   # nothing changed since the last write
     except Exception:
         pass
-    m = re.match(r"\[GMS L=([\d,]*) C=(\d+) T=([\d,]*)\]", line)
+    m = re.match(r"\[GMS L=([\d,]*) C=(\d+) T=([\d,]*)(?: G=(\d+))?(?: D=(\d+))?\]", line)
     content = ("-- Written by the Guild Milestones companion app. Safe to delete.\n"
                f"-- key:{key}\n"
                "GuildMilestonesConfig = {\n"
-               f"    levels = {lua_str(m.group(1))},\n    cap = {m.group(2)},\n    tiers = {lua_str(m.group(3))},\n}}\n")
+               f"    levels = {lua_str(m.group(1))},\n    cap = {m.group(2)},\n    tiers = {lua_str(m.group(3))},\n"
+               f"    goal = {m.group(4) or 0},\n    goaldate = {lua_str(m.group(5) or '')},\n}}\n")
     if has_week:
         body = ",\n".join("        " + lua_str(x) for x in lines)
         content += ("GuildMilestonesWeek = {\n"
@@ -965,8 +1375,8 @@ class Engine:
         self.store = (SharedStore(cfg["shared_url"].strip(), cfg["shared_token"].strip(),
                                   cfg.get("device_id") or "pc", cfg.get("my_name") or "Officer") if self.shared else None)
         self.role, self.role_text, self.last_sync, self.uploaded_ts = "", "", 0.0, 0
-        self.cache, self.outbox, self.fail_streak, self.pending_digest, self.warned = (0, None), [], 0, None, set()
-        self.pending_ladder = None
+        self.cache, self.outbox, self.fail_streak, self.warned = (0, None), [], 0, set()
+        self.pending_boards = {}
 
     def check(self, force_digest=False):
         """One pass: read file, announce, update digest, save. Returns False if it should retry."""
@@ -1026,15 +1436,29 @@ class Engine:
         return True
 
     def _boards(self, st, force_digest=False):
-        """Update the self-editing messages. Runs even when an announcement failed, so the digest button works."""
-        if self.cfg["digest_enabled"] or force_digest:
-            ok, what = push_digest(st, self.cfg, force=force_digest)
+        """Update the self-editing messages (and the Friday MVP vote). Runs even when an announcement failed,
+        so the digest button always works. Returns the boards that were freshly posted: {key: message info}."""
+        fresh = {}
+        names = {"ladder": "Race board", "fame": "Hall of Fame", "attune": "Attunements board", "crafters": "Crafters board",
+                 "lfg": "Group board", "fallen": "Fallen Heroes board", "digest": "Weekly digest"}
+        for key, _, flag in BOARDS:
+            on = self.cfg.get(flag, key != "fallen") or (key == "digest" and force_digest)
+            if not on:
+                continue
+            ok, what = push_board(st, self.cfg, key, force=force_digest and key == "digest")
             if what != "unchanged":
-                self.log(f"Weekly digest {what}." if ok else f"Digest problem: {what}")
-        if self.cfg.get("ladder_enabled", True):
-            ok, what = push_ladder(st, self.cfg)
-            if what != "unchanged":
-                self.log(f"Race board {what}." if ok else f"Race board problem: {what}")
+                self.log(f"{names[key]} {what}." if ok else f"{names[key]} problem: {what}")
+            if ok and what == "posted":
+                fresh[key] = st["boards"][key]
+        poll = mvp_poll_due(st, self.cfg, datetime.now())
+        if poll:
+            ok, _, err = post(self.cfg["webhook"], poll=poll)
+            if ok:
+                st["week"]["poll"] = True
+                self.log("Posted this week's MVP vote.")
+            else:
+                self.log(f"Couldn't post the MVP vote ({err}).")
+        return fresh
 
     def run(self, stop):
         if self.shared:
@@ -1136,31 +1560,18 @@ class Engine:
             state = load_state()
             if state["initialized"]:
                 self.log("Moved this PC's memory into the shared service.")
-        if self.pending_digest:
-            state["digest"] = self.pending_digest
-        if self.pending_ladder:
-            state["ladder"] = self.pending_ladder
+        for key, info in self.pending_boards.items():      # boards posted last time, whose save didn't go through
+            state.setdefault("boards", {})[key] = info
         new, msgs, notes = process(snap, state, self.cfg, datetime.now())
         new["snap_ts"] = snap["updated"]
         new["last_check"] = time.time()
         msgs = (new.pop("outbox", None) or []) + msgs       # anything this PC still had waiting from solo mode
-        if self.cfg["digest_enabled"] or force_digest:
-            ok, what = push_digest(new, self.cfg, force=force_digest)
-            if what != "unchanged":
-                self.log(f"Weekly digest {what}." if ok else f"Digest problem: {what}")
-            if ok and what == "posted":
-                self.pending_digest = new["digest"]         # remembered in case the save below fails
-        if self.cfg.get("ladder_enabled", True):
-            ok, what = push_ladder(new, self.cfg)
-            if what != "unchanged":
-                self.log(f"Race board {what}." if ok else f"Race board problem: {what}")
-            if ok and what == "posted":
-                self.pending_ladder = new["ladder"]
+        self.pending_boards.update(self._boards(new, force_digest))   # remembered in case the save below fails
         ok, res, err = self.store.commit(new, version)      # save memory BEFORE posting, so nothing posts twice
         if not ok:
             self.log(f"Couldn't save to the shared service ({err}). I'll try again.")
             return False
-        self.pending_digest = self.pending_ladder = None
+        self.pending_boards = {}
         new["version"] = res["version"]
         for n in notes:
             self.log(n)
@@ -1546,7 +1957,8 @@ def apply_update(zip_bytes=None):
                     rel = name[len(root) + 1:]
                     if not rel or name.endswith("/"):
                         continue
-                    if ".." in rel.split("/") or not (rel in UPDATE_FILES or rel.split("/")[0] in UPDATE_DIRS):
+                    if ".." in rel.split("/") or not (rel in UPDATE_FILES or rel.split("/")[0] in UPDATE_DIRS
+                                                     or ("/" not in rel and rel.endswith(".py"))):
                         continue
                     dest = Path(tmp) / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1559,7 +1971,7 @@ def apply_update(zip_bytes=None):
                 compile((stage / py).read_text(encoding="utf-8"), py, "exec")      # refuse a broken upload
             backup = DATA_DIR / "backup"
             backup.mkdir(parents=True, exist_ok=True)
-            for f in UPDATE_FILES:
+            for f in sorted(set(UPDATE_FILES) | {p.name for p in stage.glob("*.py")}):
                 if (APP_DIR / f).exists():
                     shutil.copy2(APP_DIR / f, backup / f)
                 if (stage / f).exists():

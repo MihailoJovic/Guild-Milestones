@@ -1,5 +1,20 @@
 # What's new
 
+## v0.11.0
+**Hall of Fame, mounts, attunements, guild goals, a Friday MVP vote and a tidy boards channel.**
+- 🏆 Hall of Fame board: every guild first, like first to 60, first mount, first epic, first boss kills, first attunements and maxed professions. A guild first also gets its own gold post.
+- 🐎 Mounts: your first mount and your epic mount get a big post (and a line in guild chat).
+- 🔑 Attunements & keys: a board showing who's ready for Onyxia, Molten Core and Blackwing Lair, and who holds the dungeon keys. In game, there's a new Raids & Keys tab.
+- 🎯 Guild goals: set "everyone to level 40 by 9 Dec" or "10 attuned to Molten Core" in the app. Progress bars show on the Race board, in the digest and in game.
+- 🏅 Friday MVP vote: a Discord poll with the week's top five.
+- 🏁 "Road to 60" card when someone hits the cap: days it took, bosses, epics, deaths and their guild firsts.
+- 🧰 Crafters board in Discord, and a name search in the game's Crafters tab.
+- 🧭 Looking for group: tick what you'd like to do in the game's new Groups tab. Guildmates see it in game and on a quiet Discord board for 90 minutes.
+- 🪦 Hardcore guilds: deaths get a farewell post and a Fallen Heroes board. On Hardcore realms the addon shares deaths automatically.
+- Every post now shows as "Guild Milestones" with the GM icon, whatever your webhook is called.
+- "Tidy the boards channel" puts all boards back in order, top to bottom.
+- The Discord page walks you through the two channels and webhooks you need.
+
 ## v0.10.1
 **New Guild Milestones icon, tidier switches, and the .exe is one click away.**
 - The new GM banner icon is on the app, the tray, the desktop shortcut and the in-game minimap button.

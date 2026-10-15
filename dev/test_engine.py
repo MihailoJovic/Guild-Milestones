@@ -97,7 +97,8 @@ ev4 = [{"kind": "D", "name": "Jaina", "ts": 2000, "a": "Westfall", "b": "", "c":
        {"kind": "I", "name": "Jaina", "ts": 2002, "a": "123", "b": "4:60", "c": "Epic Sword"}]
 items = E.event_items(ev4, st3, cfg(event_death=True, event_quest=True), {})
 check("deaths and quests counted for awards", st3["week"]["deaths"] == {"Jaina": 1} and st3["week"]["quests"] == {"Jaina": 1})
-check("epic loot pings, deaths don't", [i.get("silent") for i in items] == [True, True, False], [i.get("silent") for i in items])
+check("epic loot pings, deaths don't", [i.get("silent") for i in items] == [True, True, None, False], [i.get("silent") for i in items])
+check("first epic is a guild first", any("Guild first" in i["text"] and "Epic Sword" in i["text"] for i in items))
 titles = [t for t, _ in E.leaderboard(st3["week"])]
 check("awards include Darwin Award and Quest Machine", any("Darwin" in t for t in titles) and any("Quest" in t for t in titles), titles)
 
@@ -122,7 +123,8 @@ check("board posts are quiet", fake.posts()[-1][2].get("flags") == E.SILENT)
 # old state with a URL is converted on load
 E.save_state({"digest": {"id": "5", "url": WEBHOOK, "hash": "x"}})
 old = E.load_state()
-check("old state's URL converted to a fingerprint", "url" not in old["digest"] and old["digest"]["hook"] == E.hook_key(WEBHOOK))
+check("old state's URL converted to a fingerprint", "url" not in old["boards"]["digest"]
+      and old["boards"]["digest"]["hook"] == E.hook_key(WEBHOOK) and "digest" not in old)
 
 # ---------------------------------------------------------------- edit keeps thread_id
 fake.calls.clear()
@@ -245,6 +247,89 @@ E.latest_version = lambda: (E.APP_VERSION, "raw")
 check("same version says up to date", "up to date" in E.check_report()["text"])
 d = E.dashboard(cfg())
 check("dashboard never fails", isinstance(d, dict) and "members" in d)
+
+# ---------------------------------------------------------------- v0.11: firsts, mounts, attunements, boards
+import copy as _copy
+base = E.load_state()
+base.update({"initialized": True, "events_seen": [], "guild": "Friends",
+             "members": {"Ann-R": {"level": 59, "class": "MAGE", "first_seen": "2026-11-04", "off": 0},
+                         "Bob-R": {"level": 30, "class": "WARRIOR", "first_seen": "2026-11-04", "off": 0}}})
+snap5 = snap([("Ann-R", 60, "MAGE", 0), ("Bob-R", 30, "WARRIOR", 0)],
+             events=[{"kind": "M", "name": "Bob", "ts": 1800000000, "a": "mount", "b": "60", "c": ""},
+                     {"kind": "M", "name": "Bob", "ts": 1800000001, "a": "mount", "b": "60", "c": ""},
+                     {"kind": "B", "name": "Ann", "ts": 1800000002, "a": "Onyxia", "b": "10", "c": ""}])
+snap5["keys"] = {"Ann": ["ony"], "Bob": []}
+st5, msgs, _ = E.process(snap5, base, cfg(), NOW)
+texts = "\n".join(m["text"] for m in msgs)
+check("cap recap card posted", any(m.get("title", "").startswith("🏁 Ann") and m.get("fields") for m in msgs), texts)
+check("first to the cap in the Hall of Fame", st5["fame"]["cap"]["who"] == "Ann")
+check("first mount celebrated once", texts.count("first mount") == 1 and "First in the guild" in texts, texts)
+check("first boss kill marked", "Guild first kill" in texts)
+check("keys seen for the first time are not announced", "attuned" not in texts and st5["fame"]["attune:ony"]["who"] == "")
+snap6 = _copy.deepcopy(snap5)
+snap6["events"] = []
+snap6["keys"] = {"Ann": ["ony", "mc"], "Bob": ["ony"]}
+st6, msgs, _ = E.process(snap6, st5, cfg(), NOW)
+texts = "\n".join(m["text"] for m in msgs)
+check("first MC attunement is a guild first", "First attuned to 🔥 Molten Core" in texts and "**Ann**" in texts, texts)
+check("Onyxia isn't 'first' (Ann had it before we started)", "Bob** is attuned" in texts and "First attuned to 🐉" not in texts, texts)
+fame = E.build_fame(st6, cfg())
+check("Hall of Fame lists firsts", "First to level 60" in fame["description"] and "First mount" in fame["description"])
+att = E.build_attune(st6, cfg())
+check("attunement board lists names", any("Molten Core (1)" in f["name"] and "Ann" in f["value"] for f in att["fields"]))
+g = E.guild_goals(st6, cfg(goal_level=40, goal_date="2026-12-09", goal_raid="mc", goal_raid_count=5))
+check("two goals with progress", len(g) == 2 and g[0]["have"] == 1 and g[0]["need"] == 2 and g[1]["text"].startswith("1/5"), g)
+lad = E.build_ladder(st6, cfg(goal_level=40))
+check("race board shows the goal", any(f["name"].startswith("🎯 Goal") for f in lad["fields"]))
+check("Guild Info tag carries the goal", E.addon_line(cfg(goal_level=40, goal_date="2026-12-09")).endswith("G=40 D=20261209]"))
+
+# hardcore: deaths become a farewell and go on the wall
+st7 = _copy.deepcopy(st6)
+items = E.event_items([{"kind": "D", "name": "Bob", "ts": 1800000100, "a": "Westfall", "b": "31", "c": ""}], st7,
+                      cfg(hardcore=True), {})
+check("hardcore farewell post", items and "has fallen" in items[0]["text"] and not items[0].get("silent"), items)
+check("fallen wall", "Bob" in E.build_fallen(st7, cfg())["description"])
+
+# looking for group: fresh notes only
+snap8 = _copy.deepcopy(snap6)
+snap8["keys"], snap8["updated"] = {}, 1800001000
+snap8["lfg"] = [{"name": "Bob", "level": 30, "cls": "WARRIOR", "role": "Tank", "wants": ["sm", "rfk"], "ts": 1800000900},
+                {"name": "Old", "level": 20, "cls": "MAGE", "role": "DPS", "wants": ["dm"], "ts": 1790000000}]
+st8, _, _ = E.process(snap8, st6, cfg(), NOW)
+lfg = E.build_lfg(st8, cfg())["description"]
+check("group board shows fresh notes only", "Scarlet Monastery" in lfg and "Old" not in lfg, lfg)
+
+# the MVP vote
+from datetime import datetime as _dt
+w = {"gains": {"Ann": [5, 60], "Bob": [2, 30]}, "boss": {"Ann": 3}, "loot": {"Cid": 2}, "quests": {}, "milestones": []}
+picks = E.mvp_candidates(w)
+check("MVP candidates are unique", len(picks) == 3 and picks[0].startswith("Ann"), picks)
+st9 = {"week": w}
+check("vote not before Friday 18:00", E.mvp_poll_due(st9, cfg(), _dt(2026, 11, 13, 17, 0)) is None)
+poll = E.mvp_poll_due(st9, cfg(), _dt(2026, 11, 13, 18, 30))
+check("vote due Friday evening", poll and len(poll["answers"]) == 3)
+w["poll"] = True
+check("vote only once a week", E.mvp_poll_due(st9, cfg(), _dt(2026, 11, 13, 19, 0)) is None)
+
+# tidy: deletes old board messages, reposts in order
+fake.calls.clear()
+st10 = _copy.deepcopy(st8)
+st10["boards"] = {"ladder": {"id": "1", "hook": E.hook_key(WEBHOOK)}, "digest": {"id": "2", "hook": E.hook_key(WEBHOOK)}}
+st10["week"] = E.new_week("2026-11-09")
+E.tidy_boards(st10, cfg(), lambda t: None)
+methods = [c[0] for c in fake.calls]
+titles = [json.dumps(c[2]) for c in fake.calls if c[0] == "POST"]
+check("tidy deletes old boards", methods.count("DELETE") == 2, methods)
+check("tidy posts boards in order", "Race to" in titles[0] and "Guild Weekly" in titles[-1] and len(titles) == 6, len(titles))
+check("posts carry the GM name", all('"username": "Guild Milestones"' in t for t in titles))
+
+# parse_file reads keys and lfg
+sv2 = Path(TMP) / "sv2.lua"
+sv2.write_text('GuildMilestonesDB = {\n["members"] = {\n"A-R|10|MAGE|1|0",\n},\n["keys"] = {\n"Ann|ony,mc,bogus|1",\n},\n'
+               '["lfg"] = {\n"Bob|30|WARRIOR|Tank|sm,rfk|1800000900",\n},\n}\n', encoding="utf-8")
+ps = E.parse_file(sv2)
+check("parse keys (unknown codes dropped)", ps["keys"] == {"Ann": ["ony", "mc"]}, ps["keys"])
+check("parse lfg", ps["lfg"] and ps["lfg"][0]["wants"] == ["sm", "rfk"], ps["lfg"])
 
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

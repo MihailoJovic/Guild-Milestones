@@ -29,6 +29,27 @@ Handy commands: `/gms help`, `/gms test`, `/gms crafters alchemy`.
 Prefer running from source? Install [Python](https://www.python.org/downloads/), download this repo and double-click
 `GuildMilestones.pyw`.
 
+## Setting up Discord (once, about 5 minutes)
+1. Make a category **GUILD MILESTONES** with two text channels: **#guild-feed** (live posts; people can reply and react)
+   and **#guild-boards** (self-updating boards).
+2. Make **#guild-boards** read-only: Edit Channel → Permissions → @everyone → Send Messages off.
+3. In each channel: Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
+   Paste them on the app's **Discord** page (Feed channel and Boards channel). No need to name the webhooks or give them
+   a picture: posts always show as *Guild Milestones* with the GM icon.
+4. Click **Send examples of every post**, delete the examples once you've had a look, then go to **Boards** and click
+   **Tidy the boards channel**.
+
+What goes where:
+
+| #guild-feed | #guild-boards (top to bottom) |
+|---|---|
+| Level milestones and "first in the guild" | 🏁 Race to 60 + guild goals |
+| 🐎 Mounts, 🏆 guild firsts, 🏁 "Road to 60" cards | 🏆 Hall of Fame |
+| Epic loot, boss kills, welcomes | 🔑 Attunements & keys |
+| 🏅 Friday MVP vote | 🧰 Crafters |
+| Quiet extras: skill tiers, rare loot, attunements | 🧭 Looking for group |
+| 🪦 Farewells (Hardcore guilds) | 🪦 Fallen Heroes (Hardcore only), 📅 Weekly digest |
+
 ## Update
 The app tells you when there's a new version: click **Update** at the bottom left. Your settings live in
 `%APPDATA%\GuildMilestones`, so nothing is lost.

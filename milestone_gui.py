@@ -165,6 +165,8 @@ NAV = [("home", "⌂", "Home"), ("discord", "✉", "Discord"), ("announce", "★
 
 
 class App:
+    RAIDS = {"Molten Core": "mc", "Onyxia's Lair": "ony", "Blackwing Lair": "bwl"}
+
     def __init__(self, root, hidden=False):
         self.root, self.q, self.stop, self.running, self.latest, self.engine = root, queue.Queue(), None, False, None, None
         self.tray, self.told_tray, self.last_alert = None, False, 0.0
@@ -181,12 +183,15 @@ class App:
         cfg = E.load_config()
         self.s = {k: tk.StringVar(value=str(cfg[k])) for k in
                   ("webhook", "digest_webhook", "game_folder", "milestones", "max_level", "tiers", "level_msg", "welcome_msg",
-                   "shared_url", "shared_token", "my_name")}
+                   "shared_url", "shared_token", "my_name", "goal_level", "goal_date", "goal_raid_count")}
         self.b = {k: tk.BooleanVar(value=bool(cfg[k])) for k in
                   ("auto_start", "auto_update_addon", "announce_levels", "announce_firsts", "announce_tiers", "welcome_new",
                    "welcome_back", "digest_enabled", "ladder_enabled", "shared_on", "skip_shouted", "event_loot", "event_boss",
-                   "event_death", "event_quest", "tray_on_close", "start_with_windows")}
+                   "event_death", "event_quest", "tray_on_close", "start_with_windows", "fame_enabled", "attune_enabled",
+                   "crafters_enabled", "lfg_enabled", "hardcore", "mvp_poll", "event_mount", "event_attune", "recap")}
         self.week = tk.StringVar(value=E.WEEKDAYS[int(cfg["week_start"]) % 7])
+        self.mvp_day = tk.StringVar(value=E.WEEKDAYS[int(cfg.get("mvp_day", 4)) % 7])
+        self.goal_raid = tk.StringVar(value=next((k for k, v in self.RAIDS.items() if v == cfg.get("goal_raid")), "Molten Core"))
         self.b["start_with_windows"].set(E.start_with_windows_on())   # the switch shows what Windows really does
         self.device_id = cfg["device_id"]
         self.tested = False
@@ -422,31 +427,38 @@ class App:
         flow.pack(fill="x", pady=(12, 2))
         for i, (title, sub) in enumerate((("In game", "The addon notes milestones."),
                                           ("Addon file", "Saved when you /reload or log out."),
-                                          ("This app", "Reads it every 15 seconds."),
+                                          ("This app", "Spots the change within seconds."),
                                           ("Webhook", "Posts into your channel."))):
             flow.columnconfigure(i, weight=1, uniform="f")
             box = tk.Frame(flow, bg=CARD2, highlightthickness=1, highlightbackground=BORDER)
             box.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
             tk.Label(box, text=f"{i + 1}  {title}", bg=CARD2, fg=GOLD if i == 3 else TEXT, font=FONT_B).pack(anchor="w", padx=12, pady=(8, 0))
-            sl = tk.Label(box, text=sub, bg=CARD2, fg=MUTED, font=FONT_S, justify="left", anchor="w")
+            sl = tk.Label(box, text=sub, bg=CARD2, fg=MUTED, font=FONT_S, justify="left", anchor="w", wraplength=130)
             sl.pack(fill="x", padx=12, pady=(0, 8))
             box.bind("<Configure>", lambda e, l=sl: l.configure(wraplength=max(80, e.width - 26)))
 
-        setup = card(p, "Make the webhooks (2 minutes)")
+        setup = card(p, "Set up Discord (5 minutes, once)",
+                     "Two channels: one for live news people can chat under, one tidy read-only wall of boards.")
         setup.outer.pack(fill="x", pady=(14, 0))
         for n, text in enumerate((
-                "In Discord, make two text channels, for example  #guild-feed  and  #guild-boards.",
-                "Right-click #guild-feed → Edit Channel → Integrations → Webhooks → New Webhook.",
-                "Name it \"Guild Milestones\" (you can give it your guild's logo), then click Copy Webhook URL.",
-                "Paste it below as the Feed channel. Do the same for #guild-boards.",
-                "Tip: in #guild-boards, lock posting for members so the two boards stay at the top."), 1):
+                "In your server, make a category called  GUILD MILESTONES  (right-click the channel list → Create Category).",
+                "In it, make two text channels:  #guild-feed  (live posts, people can reply and react) and  "
+                "#guild-boards  (the self-updating boards).",
+                "Make #guild-boards read-only: Edit Channel → Permissions → @everyone → Send Messages ✗. "
+                "The app still posts there.",
+                "Right-click #guild-feed → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL. "
+                "Paste it below as the Feed channel. No need to rename it or add a picture: posts always show as "
+                "Guild Milestones with the GM icon.",
+                "Do the same for #guild-boards and paste it as the Boards channel.",
+                "Click Send examples (below) to see everything, then Boards → Tidy the boards channel to set the "
+                "real boards up in order."), 1):
             row = tk.Frame(setup, bg=CARD)
             row.pack(fill="x", pady=(8, 0))
             tk.Label(row, text=str(n), bg=GOLD, fg=GOLD_INK, font=(F + " Semibold", 9), width=2).pack(side="left", anchor="n", pady=2)
             label(row, text, wrap=620).pack(side="left", padx=(10, 0))
 
         feed = card(p, "Feed channel  ·  live posts",
-                    "Level milestones, welcomes, loot, boss kills, skill tiers. Small news arrives quietly (no phone buzz).")
+                    "Milestones, mounts, guild firsts, epic loot, boss kills, welcomes and the Friday MVP vote. Small news arrives quietly (no phone buzz).")
         feed.outer.pack(fill="x", pady=(14, 0))
         self.webhook_row = entry(feed, self.s["webhook"], secret=True)
         self.webhook_row.pack(fill="x", pady=(10, 0))
@@ -455,7 +467,7 @@ class App:
         Btn(feed, "Send a test message", self.test, "ghost").pack(anchor="w", pady=(8, 0))
 
         boards = card(p, "Boards channel  ·  posts that update themselves (optional)",
-                      "The weekly digest and the Race to 60 board. Leave empty to use the feed channel.")
+                      "Race to 60, Hall of Fame, Attunements, Crafters, Looking for group and the weekly digest. Leave empty to use the feed channel.")
         boards.outer.pack(fill="x", pady=(14, 0))
         entry(boards, self.s["digest_webhook"], secret=True).pack(fill="x", pady=(10, 0))
         self.boards_hint = label(boards, "", muted=True)
@@ -476,6 +488,11 @@ class App:
                   ("Levels", (("announce_levels", "Level milestones", "At the levels you choose below, and at the cap."),
                               ("announce_firsts", "“First in the guild” and “first of a class”", "Adds a medal line to the milestone post."))),
                   ("Professions", (("announce_tiers", "Skill tiers", "When someone reaches a tier below (quiet post)."),)),
+                  ("Big moments", (("event_mount", "Mounts", "First mount and first epic mount. A big deal in Vanilla."),
+                                   ("event_attune", "Attunements", "When someone becomes raid-ready (quiet post). "
+                                                                   "Guild firsts always get a gold card."),
+                                   ("recap", "“Road to 60” card", "When someone hits the cap: days it took, bosses, "
+                                                                  "epics, deaths and their guild firsts."))),
                   ("Adventures", (("event_loot", "Loot", "Rare and better. Epic and legendary ones ping, the rest are quiet."),
                                   ("event_boss", "Boss kills", "One post per kill naming everyone there."),
                                   ("event_death", "Deaths", "Only from friends who turned deaths on in their addon."),
@@ -515,30 +532,69 @@ class App:
                             padx=8, pady=6, highlightthickness=1, highlightbackground=BORDER, highlightcolor=GOLD)
         self.tips.pack(fill="x", pady=(10, 0))
 
+    def dropdown(self, parent, var, values):
+        opt = tk.OptionMenu(parent, var, *values)
+        opt.configure(bg=CARD2, fg=TEXT, activebackground=HOVER, activeforeground=TEXT, relief="flat",
+                      highlightthickness=0, font=FONT_S, bd=0)
+        opt["menu"].configure(bg=CARD2, fg=TEXT, activebackground=GOLD, activeforeground=GOLD_INK)
+        return opt
+
     def page_boards(self, p):
-        for key, title, sub, btn, cmd in (
-                ("digest_enabled", "Weekly digest",
-                 "One message that edits itself all week: newcomers, top level-ups, milestones, this week's awards "
-                 "(Loot Goblin, Boss Hunter, Quest Machine, Darwin Award), skill tiers and who crafts what. "
-                 "A fresh one starts each week.", "Post / refresh the digest now", self.digest_now),
-                ("ladder_enabled", "Race to 60",
-                 "A second message that edits itself: everyone's level, who got each milestone first, and a progress bar "
-                 "for the whole guild. It never resets.", "Post / refresh the race board now", self.digest_now)):
-            c = card(p)
-            c.outer.pack(fill="x", pady=(0, 14))
-            toggle_row(c, self.b[key], title, sub, title_font=FONT_H2, pady=(0, 0))
-            if key == "digest_enabled":
-                wk = tk.Frame(c, bg=CARD)
-                wk.pack(anchor="w", pady=(12, 0))
-                tk.Label(wk, text="Week starts on", bg=CARD, fg=MUTED, font=FONT_S).pack(side="left")
-                opt = tk.OptionMenu(wk, self.week, *E.WEEKDAYS)
-                opt.configure(bg=CARD2, fg=TEXT, activebackground=HOVER, activeforeground=TEXT, relief="flat",
-                              highlightthickness=0, font=FONT_S, bd=0)
-                opt["menu"].configure(bg=CARD2, fg=TEXT, activebackground=GOLD, activeforeground=GOLD_INK)
-                opt.pack(side="left", padx=10)
-            Btn(c, btn, cmd, "ghost").pack(anchor="w", pady=(12, 0))
-        label(p, "Both boards go to the Boards channel from the Discord page (or the Feed channel if that's empty). "
-                 "Need the addon file first: see Game & addon.", muted=True).pack(anchor="w")
+        top = card(p, "Your boards channel",
+                   "These messages sit in your boards channel, top to bottom, and edit themselves as the guild plays. "
+                   "Switch off any you don't want, then click Tidy to put them back in order.")
+        top.outer.pack(fill="x")
+        for key, title, sub in (
+                ("ladder_enabled", "🏁 Race to 60", "Everyone's level, who got each milestone first, and your guild goals."),
+                ("fame_enabled", "🏆 Hall of Fame", "Every guild first: first to 60, first mount, first epic, first boss "
+                                                    "kills, first attunements, maxed professions."),
+                ("attune_enabled", "🔑 Attunements & keys", "Who's ready for Onyxia, Molten Core and Blackwing Lair, "
+                                                            "and who holds the dungeon keys."),
+                ("crafters_enabled", "🧰 Crafters", "Who crafts what, highest skill first."),
+                ("lfg_enabled", "🧭 Looking for group", "Notes people post from the addon's Groups tab. Quiet, no pings."),
+                ("digest_enabled", "📅 Weekly digest", "Newcomers, level-ups, milestones and the week's awards. "
+                                                      "A fresh one each week.")):
+            toggle_row(top, self.b[key], title, sub)
+        wk = tk.Frame(top, bg=CARD)
+        wk.pack(anchor="w", pady=(12, 0))
+        tk.Label(wk, text="The week starts on", bg=CARD, fg=MUTED, font=FONT_S).pack(side="left")
+        self.dropdown(wk, self.week, E.WEEKDAYS).pack(side="left", padx=10)
+        row = tk.Frame(top, bg=CARD)
+        row.pack(fill="x", pady=(14, 0))
+        Btn(row, "Tidy the boards channel", self.tidy, "primary").pack(side="left")
+        Btn(row, "Refresh the boards now", self.digest_now, "ghost").pack(side="left", padx=(8, 0))
+
+        g = card(p, "Guild goals", "Shown with progress bars on the Race board, in the digest and in everyone's addon. "
+                                   "Leave a number at 0 to skip that goal.")
+        g.outer.pack(fill="x", pady=(14, 0))
+        grid = tk.Frame(g, bg=CARD)
+        grid.pack(fill="x", pady=(10, 0))
+        tk.Label(grid, text="Everyone to level", bg=CARD, fg=MUTED, font=FONT_S).grid(row=0, column=0, sticky="w")
+        entry(grid, self.s["goal_level"], width=6).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        tk.Label(grid, text="Attuned to", bg=CARD, fg=MUTED, font=FONT_S).grid(row=0, column=1, sticky="w", padx=(16, 0))
+        self.dropdown(grid, self.goal_raid, list(self.RAIDS)).grid(row=1, column=1, sticky="w", padx=(16, 0), pady=(4, 0))
+        tk.Label(grid, text="How many people", bg=CARD, fg=MUTED, font=FONT_S).grid(row=0, column=2, sticky="w", padx=(16, 0))
+        entry(grid, self.s["goal_raid_count"], width=6).grid(row=1, column=2, sticky="w", padx=(16, 0), pady=(4, 0))
+        tk.Label(grid, text="By (YYYY-MM-DD, optional)", bg=CARD, fg=MUTED, font=FONT_S).grid(row=0, column=3, sticky="w",
+                                                                                         padx=(16, 0))
+        entry(grid, self.s["goal_date"], width=14).grid(row=1, column=3, sticky="w", padx=(16, 0), pady=(4, 0))
+
+        v = card(p, "Friday MVP vote")
+        v.outer.pack(fill="x", pady=(14, 0))
+        toggle_row(v, self.b["mvp_poll"], "Post a vote for the week's MVP",
+                   "A Discord poll in the feed channel with the week's top five (levels, boss kills, loot, quests). "
+                   "Open for two days. Discord shows the results.", pady=(0, 0))
+        dr = tk.Frame(v, bg=CARD)
+        dr.pack(anchor="w", pady=(10, 0))
+        tk.Label(dr, text="Post it on", bg=CARD, fg=MUTED, font=FONT_S).pack(side="left")
+        self.dropdown(dr, self.mvp_day, E.WEEKDAYS).pack(side="left", padx=10)
+        tk.Label(dr, text="from 18:00", bg=CARD, fg=MUTED, font=FONT_S).pack(side="left")
+
+        h = card(p)
+        h.outer.pack(fill="x", pady=(14, 0))
+        toggle_row(h, self.b["hardcore"], "🪦 Hardcore guild",
+                   "Deaths are final, so each one gets a proper farewell post and a place on a Fallen Heroes board. "
+                   "On Hardcore realms the addon shares deaths automatically.", title_font=FONT_H2, pady=(0, 0))
 
     def page_game(self, p):
         c = card(p, "Game folder", "The WoW: Forever folder inside World of Warcraft. It has Interface and WTF inside.")
@@ -732,6 +788,8 @@ class App:
         c["savedvars"] = ""
         c["device_id"] = self.device_id
         c["week_start"] = E.WEEKDAYS.index(self.week.get())
+        c["mvp_day"] = E.WEEKDAYS.index(self.mvp_day.get())
+        c["goal_raid"] = self.RAIDS.get(self.goal_raid.get(), "mc")
         return c
 
     def problem(self, c, need_file=True):
@@ -752,6 +810,11 @@ class App:
                                 "then type /reload.")
         if not c["max_level"].isdigit():
             return ("announce", "Level cap should be a number.")
+        for key, what in (("goal_level", "The level goal"), ("goal_raid_count", "The attunement goal")):
+            if c[key] and not c[key].isdigit():
+                return ("boards", f"{what} should be a number (or 0 to skip it).")
+        if c["goal_date"] and not E.goal_date(c):
+            return ("boards", "Write the goal date like 2026-12-09 (year-month-day), or leave it empty.")
         if not E.nums(c["milestones"]):
             return ("announce", "Add at least one milestone level, like 10, 20, 30.")
         for key in ("level_msg", "welcome_msg"):
@@ -798,6 +861,34 @@ class App:
                 w.bind("<Enter>", lambda e, r=row: r.configure(highlightbackground=GOLD))
                 w.bind("<Leave>", lambda e, r=row: r.configure(highlightbackground=BORDER))
         tk.Label(win, text="", bg=CARD).pack(pady=4)
+
+    def tidy(self):
+        c = self.collect()
+        E.save_config(c)
+        prob = E.webhook_problem(c["webhook"]) or E.webhook_problem(c["digest_webhook"], required=False)
+        if prob:
+            return self.warn(("discord", "Discord page: " + prob))
+        if c["shared_on"]:
+            return messagebox.showinfo("Tidy the boards", "In shared mode, only the Announcer's app posts. Ask them to tidy, "
+                                       "or turn shared mode off for a moment.")
+        if not messagebox.askyesno("Tidy the boards channel", "This deletes the board messages this app posted and posts "
+                                   "them again, in order. Nothing else in the channel is touched.\n\nGo ahead?"):
+            return
+        self.log("Tidying the boards channel...")
+
+        def work():
+            try:
+                with E._LOCK:
+                    st = E.load_state()
+                    ok = E.tidy_boards(st, c, self.log)
+                    E.save_state(st)
+            except Exception as e:
+                ok = False
+                self.log(f"Tidy problem: {e}")
+            self.q.put(lambda: (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Tidy the boards", "Done! Your boards are back in order." if ok else
+                "Some boards didn't post. The Activity page shows why."))
+        threading.Thread(target=work, daemon=True).start()
 
     def explain_file(self):
         self.refresh_addon()

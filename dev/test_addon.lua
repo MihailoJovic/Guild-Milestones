@@ -9,7 +9,7 @@ W.fire("PLAYER_LOGIN"); W.run()
 check("login prints ready line", W.printed("ready"))
 check("prefix registered", W.prefix == "GMS1")
 check("panel registered", W.category ~= nil)
-check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.10.1", W.addon[1] and W.addon[1].text)
+check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.11.0", W.addon[1] and W.addon[1].text)
 W.clear()
 
 -- 2. levels
@@ -83,7 +83,7 @@ W.fire("GUILD_ROSTER_UPDATE")
 check("snapshot members", GuildMilestonesDB.members and #GuildMilestonesDB.members == 2)
 check("snapshot row", GuildMilestonesDB.members[1] == "Thrall-Realm|60|SHAMAN|0|0", GuildMilestonesDB.members[1])
 check("snapshot profs", GuildMilestonesDB.profs and #GuildMilestonesDB.profs == 3, GuildMilestonesDB.profs and #GuildMilestonesDB.profs)
-check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.10.1")
+check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.11.0")
 
 -- 10. crafters
 slash("crafters")
@@ -251,7 +251,7 @@ W.clear(); W.fire("CHAT_MSG_LOOT", "You receive loot: " .. rare .. "."); W.fire(
 local ev = GuildMilestonesDB.events or {}
 check("loot event recorded", ev[1] and ev[1]:match("^I|Thrall|%d+|19019|3:80|Thunderfury$"), ev[1])
 check("boss event recorded", ev[2] and ev[2]:match("^B|Thrall|%d+|Ragnaros|10|$"), ev[2])
-check("death event recorded", ev[3] and ev[3]:match("^D|Thrall|%d+|Westfall||$"), ev[3])
+check("death event recorded", ev[3] and ev[3]:match("^D|Thrall|%d+|Westfall|%d+|$"), ev[3])
 local sent = false
 for _, m in ipairs(W.addon) do if m.text:match("^E|I|Thrall|") then sent = true end end
 check("event shared with other addons", sent)
@@ -338,12 +338,12 @@ check("snapshot remembers the guild", GuildMilestonesDB.guild == "Friends Foreve
 
 -- version notice
 W.clear()
-W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.11.0", "GUILD", "Jaina-Realm")
-check("newer version noticed", W.printed("v0.11.0") and W.printed("Jaina"))
-W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.11.0", "GUILD", "Jaina-Realm")
-check("notice only once per session", not W.printed("v0.11.0"))
+W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.12.0", "GUILD", "Jaina-Realm")
+check("newer version noticed", W.printed("v0.12.0") and W.printed("Jaina"))
+W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.12.0", "GUILD", "Jaina-Realm")
+check("notice only once per session", not W.printed("v0.12.0"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
-check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.10.1", W.addon[1] and W.addon[1].text)
+check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.11.0", W.addon[1] and W.addon[1].text)
 local nHeard = #GuildMilestonesDB.heard
 W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
 check("version messages are not logged as events", #GuildMilestonesDB.heard == nHeard)
@@ -361,7 +361,66 @@ W.ns.pages.settings.selectors.minimap.step(1)
 check("minimap shown again", GuildMilestonesMinimapButton:IsShown())
 GuildMilestonesMinimapButton.scripts.OnEnter(GuildMilestonesMinimapButton)
 check("tooltip shows", W.tooltip == "Guild Milestones")
-check("welcomed once", GuildMilestonesDB.welcomed == "0.10.1")
+check("welcomed once", GuildMilestonesDB.welcomed == "0.11.0")
+
+-- v0.11: mounts, attunements, looking for group
+W.clear(); GuildMilestonesDB.events = nil
+IsMounted = function() return true end
+GetUnitSpeed = function() return 11.2 end                 -- 60% faster than running
+W.ns.CheckMount(); W.run()
+check("first mount event", GuildMilestonesDB.events and GuildMilestonesDB.events[1]:match("^M|Thrall|%d+|mount|60|$"), GuildMilestonesDB.events and GuildMilestonesDB.events[1])
+check("first mount said in guild chat", W.chat[1] and W.chat[1].text:find("first mount"), W.chat[1] and W.chat[1].text)
+W.clear(); W.ns.CheckMount(); W.run()
+check("same mount only once", #W.chat == 0)
+GetUnitSpeed = function() return 14 end                   -- epic: twice running speed
+W.ns.CheckMount(); W.run()
+check("epic mount noticed", W.chat[1] and W.chat[1].text:find("epic mount"))
+IsMounted = function() return false end
+
+local done = {}
+C_QuestLog = { IsQuestFlaggedCompleted = function(id) return done[id] or false end }
+local loginRow = false
+for _, r in ipairs(GuildMilestonesDB.keys or {}) do if r:match("^Thrall||%d+$") then loginRow = true end end
+check("keys told at login (none yet)", loginRow)
+W.clear(); W.ns.CheckKeys(false)
+check("unchanged keys aren't sent again", #W.addon == 0)
+done[7848] = true
+W.clear(); GuildMilestonesDB.events = nil; W.ns.CheckKeys(true)
+check("new attunement told", W.addon[1] and W.addon[1].text:match("^E|A|Thrall|%d+|mc"), W.addon[1] and W.addon[1].text)
+check("keys row stored", GuildMilestonesDB.keys[#GuildMilestonesDB.keys]:match("^Thrall|mc|%d+$"))
+W.fire("CHAT_MSG_ADDON", "GMS1", "K|Jaina|ony,mc", "GUILD", "Jaina-Realm")
+W.fire("CHAT_MSG_ADDON", "GMS1", "K|Jaina|ony,mc,bwl", "GUILD", "Jaina-Realm")
+local jaina = 0
+for _, r in ipairs(GuildMilestonesDB.keys) do if r:match("^Jaina|") then jaina = jaina + 1 end end
+check("one keys row per person", jaina == 1)
+W.clear(); W.ns.Open("raids")
+check("raids tab fills", not W.printed("couldn't fill"), W.out[1])
+
+W.ns.SetLFG("Tank", { "sm", "rfk" })
+check("lfg note sent", W.addon[#W.addon].text:match("^G|Thrall|%d+|SHAMAN|Tank|sm,rfk|%d+$"), W.addon[#W.addon].text)
+W.fire("CHAT_MSG_ADDON", "GMS1", "G|Jaina|30|MAGE|DPS|dm|1700000000", "GUILD", "Jaina-Realm")
+local rows = W.ns.GroupRows()
+check("lfg rows from me and Jaina", #rows == 2, #rows)
+W.fire("CHAT_MSG_ADDON", "GMS1", "G|Jaina|-", "GUILD", "Jaina-Realm")
+check("lfg cleared", #W.ns.GroupRows() == 1)
+W.clear(); W.ns.Open("groups")
+check("groups tab fills", not W.printed("couldn't fill"), W.out[1])
+W.ns.SetLFG(nil, {})
+check("my note cleared", #W.ns.GroupRows() == 0 and W.addon[#W.addon].text == "G|Thrall|-")
+
+-- goals travel in the Guild Info tag
+GuildMilestonesConfig = { levels = "10,20", cap = 60, tiers = "75", goal = 40, goaldate = "20261209" }
+function CanEditGuildInfo() return true end
+W.guildInfo = "Hi"; local setTo
+function SetGuildInfoText(t) setTo = t; W.guildInfo = t end
+slash("publish")
+check("goal published", setTo and setTo:find("G=40 D=20261209]", 1, true), setTo)
+W.fire("GUILD_ROSTER_UPDATE")
+check("goal read back", W.ns.GuildConfig().G == "40" and W.ns.GuildConfig().D == "20261209")
+W.clear(); W.ns.Open("race")
+check("race tab with goal fills", not W.printed("couldn't fill"), W.out[1])
+W.clear(); W.ns.Open("crafters"); W.ns.pages.crafters.search("thr")
+check("crafter search works", not W.printed("couldn't fill"), W.out[1])
 
 -- 15. logout saves
 GuildMilestonesDB.updated = nil; W.fire("PLAYER_LOGOUT")

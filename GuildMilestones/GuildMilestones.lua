@@ -1,4 +1,4 @@
--- Guild Milestones 0.10.1
+-- Guild Milestones 0.11.0
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.10.1"
+local VERSION = "0.11.0"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -33,6 +33,9 @@ local DEFAULTS = {
     snapshot = true,                  -- keep guild data for the companion app
     toasts = true,                    -- small pop-ups when a guildmate hits a milestone
     minimap = true,                   -- the GM button by the minimap
+    mounts = true,                    -- announce my first mount and epic mount
+    mountMsg = "{name} just got their first mount! No more walking.",
+    epicMountMsg = "{name} is now riding an epic mount!",
     lvlMode = "guild",                -- guild = the guild's milestone levels, every = each level, off
     lootMin = 3,                      -- -1 off, 0 any, 2 uncommon, 3 rare, 4 epic, 5 legendary
     deaths = false,
@@ -122,8 +125,13 @@ local function ReadGuildConfig()
 end
 
 local function ConfigTag(c)
-    return "[GMS L=" .. tostring(c.levels or ""):gsub("%s", "") .. " C=" .. (tonumber(c.cap) or 0)
-        .. " T=" .. tostring(c.tiers or ""):gsub("%s", "") .. "]"
+    local goal = tonumber(c.goal) or 0
+    local extra = ""
+    if goal > 0 then
+        extra = " G=" .. goal .. ((tostring(c.goaldate or ""):match("^%d+$")) and (" D=" .. c.goaldate) or "")
+    end
+    return "[GMS L=" .. (tostring(c.levels or ""):gsub("%s", "")) .. " C=" .. (tonumber(c.cap) or 0)
+        .. " T=" .. (tostring(c.tiers or ""):gsub("%s", "")) .. extra .. "]"
 end
 
 local publishedOnce = false
@@ -355,7 +363,7 @@ end
 local function OnDeath()
     if not S("deaths") then return end
     local zone = (GetZoneText and GetZoneText()) or ""
-    Event("D", zone)
+    Event("D", zone, UnitLevel("player"))
     Chat(Fill(S("deathMsg"), { name = UnitName("player"), zone = zone ~= "" and zone or "the wilds" }), true)
 end
 
@@ -381,6 +389,126 @@ local function OnQuest(questID)
     end)
     Event("Q", title or "a quest")
     Chat(Fill(S("questMsg"), { name = UnitName("player"), quest = title or "a quest" }), true)
+end
+
+-- ------------------------------------------------------------------ mounts
+-- Spotted by speed while mounted: a normal mount is 60% faster than running, an epic one 100%.
+-- Works on any client, no mount list needed. Each character is celebrated once per mount tier.
+local RUN_SPEED = 7
+
+local function CheckMount()
+    if not (IsMounted and IsMounted()) then return end
+    local ok, speed = pcall(GetUnitSpeed, "player")
+    if not ok or not tonumber(speed) or speed <= 0 then return end
+    local pct = (speed / RUN_SPEED - 1) * 100
+    local tier = (pct >= 90 and 2) or (pct >= 50 and 1) or 0
+    if tier == 0 then return end
+    local me = UnitName("player")
+    local db = GuildMilestonesDB
+    db.mounts = db.mounts or {}
+    if (db.mounts[me] or 0) >= tier then return end
+    db.mounts[me] = tier
+    local kind = tier == 2 and "epic" or "mount"
+    Event("M", kind, math.floor(pct + 0.5))
+    Moment("M", me, kind)
+    if S("mounts") then
+        Chat(Fill(tier == 2 and S("epicMountMsg") or S("mountMsg"), { name = me }))
+    end
+end
+
+-- ----------------------------------------------------- attunements and keys
+-- The quest that finishes each attunement or key. Codes must match ATTUNEMENTS in engine.py.
+local ATTUNE = {
+    { code = "ony",    quests = { 6502, 6602 } },   -- Drakefire Amulet (A) / Blood of the Black Dragon Champion (H)
+    { code = "mc",     quests = { 7848 } },         -- Attunement to the Core
+    { code = "bwl",    quests = { 7761 } },         -- Blackhand's Command
+    { code = "ubrs",   quests = { 4743 } },         -- Seal of Ascension
+    { code = "scholo", quests = { 5505, 5511 } },   -- The Key to Scholomance (A / H)
+    { code = "brd",    quests = { 3802 } },         -- Dark Iron Legacy (Shadowforge Key)
+}
+ns.ATTUNE = ATTUNE
+
+local function QuestDone(id)
+    local ok, done = pcall(function()
+        if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then return C_QuestLog.IsQuestFlaggedCompleted(id) end
+        if IsQuestFlaggedCompleted then return IsQuestFlaggedCompleted(id) end
+    end)
+    return ok and done == true
+end
+
+-- Keep one line per person: "Name|ony,mc|time"
+local function StoreRow(listKey, who, row)
+    local db = GuildMilestonesDB
+    db[listKey] = db[listKey] or {}
+    local list = db[listKey]
+    for i = #list, 1, -1 do
+        if list[i]:match("^([^|]*)") == who then table.remove(list, i) end
+    end
+    if row then list[#list + 1] = row end
+    while #list > 200 do table.remove(list, 1) end
+end
+
+local myKeys                              -- what we last told the guild, as "ony,mc"
+local function CheckKeys(announce)
+    local have = {}
+    for _, a in ipairs(ATTUNE) do
+        for _, q in ipairs(a.quests) do
+            if QuestDone(q) then have[#have + 1] = a.code; break end
+        end
+    end
+    local now = table.concat(have, ",")
+    if now == myKeys then return end
+    local me = UnitName("player")
+    if announce and myKeys then
+        local old = {}
+        for c in myKeys:gmatch("[^,]+") do old[c] = true end
+        for _, c in ipairs(have) do
+            if not old[c] then Event("A", c); Moment("A", me, c) end
+        end
+    end
+    myKeys = now
+    StoreRow("keys", me, me .. "|" .. now .. "|" .. time())
+    Tell("K|" .. me .. "|" .. now)
+end
+ns.CheckKeys = CheckKeys
+
+-- ------------------------------------------------------- looking for group
+-- What you're looking for (set in the window's Groups tab), shared with guildmates for 90 minutes.
+local LFG_TTL = 90 * 60
+
+function ns.SetLFG(role, wants)
+    local me, db = UnitName("player"), GuildMilestonesDB
+    if not role or #wants == 0 then
+        db.myLfg = nil
+        StoreRow("lfg", me, nil)
+        Tell("G|" .. me .. "|-")
+        return
+    end
+    local _, cls = UnitClass("player")
+    db.myLfg = { role = role, wants = table.concat(wants, ","), t = time() }
+    local row = table.concat({ me, UnitLevel("player"), cls or "", role, db.myLfg.wants, time() }, "|")
+    StoreRow("lfg", me, row)
+    Tell("G|" .. row)
+end
+
+function ns.MyLFG()
+    local m = GuildMilestonesDB.myLfg
+    if m and time() - (m.t or 0) < LFG_TTL then return m end
+    return nil
+end
+
+function ns.GroupRows()                  -- fresh notes: { name, level, cls, role, wants = {..}, t }
+    local out = {}
+    for _, line in ipairs(GuildMilestonesDB.lfg or {}) do
+        local n, l, c, r, w, t = line:match("^([^|]+)|(%d+)|([^|]*)|([^|]*)|([^|]*)|(%d+)$")
+        if n and time() - tonumber(t) < LFG_TTL then
+            local wants = {}
+            for x in w:gmatch("[^,]+") do wants[#wants + 1] = x end
+            out[#out + 1] = { name = n, level = tonumber(l), cls = c, role = r, wants = wants, t = tonumber(t) }
+        end
+    end
+    table.sort(out, function(a, b) return a.t > b.t end)
+    return out
 end
 
 -- -------------------------------------------------------- profession skills
@@ -731,6 +859,7 @@ end
 ns.VERSION, ns.S, ns.Set, ns.Say, ns.Short, ns.NumSet = VERSION, S, Set, Say, Short, NumSet
 ns.MaxLevel, ns.Preview, ns.ReadGuildConfig, ns.RequestRoster = MaxLevel, Preview, ReadGuildConfig, RequestRoster
 ns.QUALITY_NAME = QUALITY_NAME
+ns.CheckMount = CheckMount
 function ns.GuildConfig() return guildCfg end
 function ns.Professions()                -- live guild professions, or the last saved ones
     local ok, rows = pcall(ProfessionRows)
@@ -776,6 +905,20 @@ f:SetScript("OnEvent", function(_, event, ...)
         end
         After(8, function() CheckSkills(false); skillsReady = true end)   -- baseline, announces nothing
         After(20, function() Tell("V|" .. VERSION) end)                    -- for the "newer version" notice
+        After(12, function() CheckKeys(false) end)                         -- tell the guild our attunements
+        After(25, function()                                               -- still looking for a group? say so again
+            local m = ns.MyLFG()
+            if m then ns.SetLFG(m.role, (function() local t = {} for x in m.wants:gmatch("[^,]+") do t[#t + 1] = x end return t end)()) end
+        end)
+        pcall(function()                                                   -- Hardcore realm: deaths are shared by default
+            if GuildMilestonesDB.settings.deaths == nil and C_GameRules and C_GameRules.IsHardcoreActive
+               and C_GameRules.IsHardcoreActive() then
+                Set("deaths", true)
+            end
+        end)
+        if C_Timer and C_Timer.NewTicker then
+            C_Timer.NewTicker(3, function() pcall(CheckMount) end)          -- mounts: a quick speed check
+        end
         After(6, function()
             if ns.Welcome then pcall(ns.Welcome) end
             if IsInGuild() then
@@ -797,6 +940,7 @@ f:SetScript("OnEvent", function(_, event, ...)
         OnBoss(...)
     elseif event == "QUEST_TURNED_IN" then
         OnQuest((...))
+        After(2, function() CheckKeys(true) end)          -- that quest may have finished an attunement
     elseif event == "SKILL_LINES_CHANGED" or event == "CHAT_MSG_SKILL" then
         SkillsChanged()
     elseif event == "CHAT_MSG_ADDON" then
@@ -807,7 +951,16 @@ f:SetScript("OnEvent", function(_, event, ...)
             if Short(sender) ~= Short(UnitName("player")) then OnVersion(ver, sender) end
             return
         end
-        if prefix == PREFIX and channel == "GUILD" and Short(sender) ~= Short(UnitName("player")) then
+        local mine = Short(sender) == Short(UnitName("player"))
+        if prefix == PREFIX and channel == "GUILD" and not mine then
+            local kw, kl = tostring(text):match("^K|([^|]+)|([%a,]*)$")          -- a guildmate's attunements
+            if kw then StoreRow("keys", kw, kw .. "|" .. kl .. "|" .. time()); return end
+            local gw = tostring(text):match("^G|([^|]+)|%-$")                    -- stopped looking for a group
+            if gw then StoreRow("lfg", gw, nil); return end
+            local gn, grest = tostring(text):match("^G|([^|]+)|(%d+|[^|]*|[^|]*|[^|]*)|%d+$")
+            if gn then StoreRow("lfg", gn, gn .. "|" .. grest .. "|" .. time()); return end
+        end
+        if prefix == PREFIX and channel == "GUILD" and not mine then
             local keep = S("snapshot")
             local row = tostring(text):match("^E|(.+)$")
             local who, lvl = tostring(text):match("^L|([^|]+)|(%d+)$")

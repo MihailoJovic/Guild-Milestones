@@ -131,10 +131,29 @@ local win, pages, tabs = nil, {}, {}
 local PAGE_ORDER = {
     { key = "overview", label = "Overview" },
     { key = "race", label = "Guild Race" },
+    { key = "raids", label = "Raids & Keys" },
+    { key = "groups", label = "Groups" },
     { key = "crafters", label = "Crafters" },
     { key = "week", label = "This Week" },
     { key = "settings", label = "Settings" },
 }
+
+-- Attunements and keys, in the order they're shown. Codes match ATTUNE in GuildMilestones.lua.
+local KEYS = { { "ony", "Ony" }, { "mc", "MC" }, { "bwl", "BWL" }, { "ubrs", "UBRS" }, { "scholo", "Scholo" }, { "brd", "BRD" } }
+local KEY_NAMES = { ony = "Onyxia's Lair", mc = "Molten Core", bwl = "Blackwing Lair", ubrs = "Upper Blackrock Spire",
+                    scholo = "Scholomance", brd = "Shadowforge (BRD)" }
+-- What you can look for in Groups. Codes match LFG_NAMES in engine.py.
+local LFG_OPTIONS = {
+    { "rfc", "Ragefire" }, { "wc", "Wailing Caverns" }, { "dm", "Deadmines" }, { "sfk", "Shadowfang" },
+    { "bfd", "Blackfathom" }, { "stocks", "Stockade" }, { "gnomer", "Gnomeregan" }, { "rfk", "Razorfen Kraul" },
+    { "sm", "Scarlet Monastery" }, { "rfd", "Razorfen Downs" }, { "ulda", "Uldaman" }, { "zf", "Zul'Farrak" },
+    { "mara", "Maraudon" }, { "st", "Sunken Temple" }, { "brd", "Blackrock Depths" }, { "lbrs", "Lower Spire" },
+    { "ubrs", "Upper Spire" }, { "dire", "Dire Maul" }, { "strat", "Stratholme" }, { "scholo", "Scholomance" },
+    { "attune", "Attunement help" }, { "quest", "Questing buddy" }, { "elite", "Elite quests" }, { "pvp", "PvP" },
+}
+local LFG_NAME = {}
+for _, o in ipairs(LFG_OPTIONS) do LFG_NAME[o[1]] = o[2] end
+local READY = "|TInterface\\RaidFrame\\ReadyCheck-Ready:14|t"
 
 local function Show(key)
     for k, p in pairs(pages) do
@@ -260,6 +279,8 @@ local function BuildRace(page)
     end
     local total = Text(card, "GameFontHighlightSmall", C.muted)
     total:SetPoint("BOTTOMLEFT", 12, 30)
+    local goalText = Text(card, "GameFontHighlightSmall", C.text)
+    goalText:SetPoint("BOTTOMLEFT", 12, 50)
     local goal = Bar(card, C.good)
     goal:SetPoint("BOTTOMLEFT", 12, 12)
     goal:SetPoint("BOTTOMRIGHT", -12, 12)
@@ -296,6 +317,139 @@ local function BuildRace(page)
         total:SetText(string.format("Guild progress: %s%d|r of %d levels   ·   %s%d|r of %d at %d   ·   %d members",
             GOLD_HEX, sum, cap * #list, GOLD_HEX, top, #list, cap, #list))
         goal:Set(sum, cap * math.max(#list, 1))
+        -- the officers' goal, if they set one (it travels in the Guild Info text)
+        local g = ns.GuildConfig and ns.GuildConfig() or {}
+        local gl = tonumber(g.G) or 0
+        if gl > 0 and #list > 0 then
+            local there = 0
+            for _, m in ipairs(list) do if m.level >= gl then there = there + 1 end end
+            local d = tostring(g.D or "")
+            local by = d:match("^%d%d%d%d(%d%d)(%d%d)$") and (" by " .. d:sub(7, 8) .. "." .. d:sub(5, 6) .. ".") or ""
+            goalText:SetText(GOLD_HEX .. "Guild goal:|r everyone to level " .. gl .. by .. "   " .. there .. "/" .. #list .. " there")
+        else
+            goalText:SetText("")
+        end
+    end
+end
+
+-- ---------------------------------------------------- page: raids & keys
+local function BuildRaids(page)
+    local card = Card(page, "Who's attuned")
+    card:SetAllPoints(page)
+    local X0, COL = 170, 56
+    for i, k in ipairs(KEYS) do
+        local h = Text(card, "GameFontNormalSmall", C.muted, "CENTER")
+        h:SetPoint("TOPLEFT", X0 + (i - 1) * COL, -30)
+        h:SetWidth(COL)
+        h:SetText(k[2])
+    end
+    local ROWS = 13
+    local rows = {}
+    for r = 1, ROWS do
+        local y = -50 - (r - 1) * 24
+        local row = { name = Text(card, "GameFontHighlightSmall", C.text), cells = {} }
+        row.name:SetPoint("TOPLEFT", 12, y)
+        row.name:SetWidth(150)
+        row.name:SetWordWrap(false)
+        for i = 1, #KEYS do
+            local c = Text(card, "GameFontHighlightSmall", C.text, "CENTER")
+            c:SetPoint("TOPLEFT", X0 + (i - 1) * COL, y)
+            c:SetWidth(COL)
+            row.cells[i] = c
+        end
+        rows[r] = row
+    end
+    local foot = Text(card, "GameFontHighlightSmall", C.muted)
+    foot:SetPoint("BOTTOMLEFT", 12, 10)
+    foot:SetPoint("RIGHT", card, "RIGHT", -12, 0)
+
+    function page:Refresh()
+        if ns.CheckKeys then pcall(ns.CheckKeys, false) end
+        local people, count = {}, {}
+        for _, line in ipairs(GuildMilestonesDB.keys or {}) do
+            local who, ks = line:match("^([^|]+)|([^|]*)|")
+            if who then
+                local have, n = {}, 0
+                for c in ks:gmatch("[^,]+") do have[c] = true; n = n + 1; count[c] = (count[c] or 0) + 1 end
+                people[#people + 1] = { name = who, have = have, n = n }
+            end
+        end
+        table.sort(people, function(a, b) if a.n ~= b.n then return a.n > b.n end return a.name < b.name end)
+        for r, row in ipairs(rows) do
+            local p = people[r]
+            row.name:SetText(p and p.name or (r == 1 and (MUTED_HEX .. "Nobody has reported yet.|r") or ""))
+            for i, k in ipairs(KEYS) do
+                row.cells[i]:SetText(p and (p.have[k[1]] and READY or "|cff3a3f4a-|r") or "")
+            end
+        end
+        local parts = {}
+        for _, k in ipairs({ "ony", "mc", "bwl" }) do parts[#parts + 1] = KEY_NAMES[k] .. " " .. GOLD_HEX .. (count[k] or 0) .. "|r" end
+        foot:SetText("Raid-ready: " .. table.concat(parts, "   ·   ") .. "\n" .. MUTED_HEX
+            .. "Guildmates show up here once they log in with the addon.|r")
+    end
+end
+
+-- ---------------------------------------------------- page: groups (looking for group)
+local function BuildGroups(page)
+    local mine = Card(page, "I'm looking for")
+    mine:SetPoint("TOPLEFT", 0, 0)
+    mine:SetPoint("TOPRIGHT", 0, 0)
+    mine:SetHeight(232)
+    page.role, page.wants = "DPS", {}
+    local roleButtons = {}
+    for i, role in ipairs({ "Tank", "Healer", "DPS" }) do
+        local b = Button(mine, role, 70, 22, false, function() page.role = role; page:Refresh() end)
+        b:SetPoint("TOPRIGHT", -12 - (3 - i) * 76, -6)
+        roleButtons[role] = b
+    end
+    local chips = {}
+    for i, o in ipairs(LFG_OPTIONS) do
+        local b = Button(mine, o[2], 118, 20, false, function()
+            page.wants[o[1]] = not page.wants[o[1]] or nil
+            page:Refresh()
+        end)
+        b:SetPoint("TOPLEFT", 12 + ((i - 1) % 4) * 122, -32 - math.floor((i - 1) / 4) * 24)
+        chips[o[1]] = b
+    end
+    local post = Button(mine, "Post my note", 130, 24, true, function()
+        local list = {}
+        for _, o in ipairs(LFG_OPTIONS) do if page.wants[o[1]] then list[#list + 1] = o[1] end end
+        if #list == 0 then ns.Say("Tick at least one thing you're looking for first."); return end
+        ns.SetLFG(page.role, list)
+        ns.Say("Your note is up for 90 minutes. Guildmates see it here, and it shows quietly in Discord.")
+        page:Refresh()
+    end)
+    post:SetPoint("BOTTOMLEFT", 12, 10)
+    local clear = Button(mine, "Clear", 80, 24, false, function()
+        ns.SetLFG(nil, {}); page.wants = {}; page:Refresh()
+    end)
+    clear:SetPoint("LEFT", post, "RIGHT", 8, 0)
+    local status = Text(mine, "GameFontHighlightSmall", C.muted)
+    status:SetPoint("LEFT", clear, "RIGHT", 12, 0)
+
+    local list = Card(page, "Guildmates looking right now")
+    list:SetPoint("TOPLEFT", mine, "BOTTOMLEFT", 0, -10)
+    list:SetPoint("BOTTOMRIGHT", 0, 0)
+    local lines = Lines(list, 7, -32, 24)
+
+    function page:Refresh()
+        local m = ns.MyLFG()
+        if m and not next(self.wants) then                 -- show what I posted earlier
+            self.role = m.role
+            for x in tostring(m.wants):gmatch("[^,]+") do self.wants[x] = true end
+        end
+        for role, b in pairs(roleButtons) do Paint(b, role == self.role and C.hover or C.card, role == self.role and C.gold or nil) end
+        for code, b in pairs(chips) do Paint(b, self.wants[code] and C.hover or C.card, self.wants[code] and C.gold or nil) end
+        status:SetText(m and (GOLD_HEX .. "Your note is up.|r " .. MUTED_HEX .. "Posted " .. Ago(m.t) .. "|r") or "")
+        local out = {}
+        for _, r in ipairs(ns.GroupRows()) do
+            local wants = {}
+            for _, w in ipairs(r.wants) do wants[#wants + 1] = LFG_NAME[w] or w end
+            out[#out + 1] = "|cff" .. ClassHex(r.cls) .. r.name .. "|r " .. MUTED_HEX .. r.level .. " " .. r.role .. "|r  "
+                .. table.concat(wants, ", ") .. "  " .. MUTED_HEX .. Ago(r.t) .. "|r"
+        end
+        if #out == 0 then out[1] = MUTED_HEX .. "Nobody's looking right now. Be the first!|r" end
+        lines:Fill(out)
     end
 end
 
@@ -333,7 +487,26 @@ local function BuildCrafters(page)
     end
     local note = Text(card, "GameFontHighlightSmall", C.muted)
     note:SetPoint("BOTTOMLEFT", 12, 10)
-    page.selected = nil
+    page.selected, page.query = nil, ""
+
+    local box = CreateFrame("EditBox", nil, card, "BackdropTemplate")          -- search by name
+    Paint(box, C.side)
+    box:SetSize(170, 20)
+    box:SetPoint("TOPRIGHT", -12, -6)
+    box:SetAutoFocus(false)
+    box:SetFontObject(GameFontHighlightSmall)
+    box:SetTextInsets(6, 6, 0, 0)
+    local hint = Text(box, "GameFontDisableSmall", C.muted)
+    hint:SetPoint("LEFT", 6, 0)
+    hint:SetText("Search a name...")
+    function page.search(text)
+        page.query = (tostring(text or "")):lower()
+        if page.query == "" then hint:Show() else hint:Hide() end
+        page:Refresh()
+    end
+    box:SetScript("OnTextChanged", function(self) page.search(self:GetText()) end)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
     function page:Refresh()
         local data, source = ns.Professions()
@@ -357,11 +530,18 @@ local function BuildCrafters(page)
             end
         end
         local list = by[self.selected or ""] or {}
+        if self.query ~= "" then                         -- searching: every profession of the matching people
+            list = {}
+            for _, r in ipairs(data) do
+                if ns.Short(r.name):lower():find(self.query, 1, true) then list[#list + 1] = r end
+            end
+        end
         table.sort(list, function(x, y) return x.skill > y.skill end)
         for i, r in ipairs(rows) do
             local m = list[i]
             if m then
-                r.name:SetText(ns.Short(m.name)); r.skill:SetText(tostring(m.skill)); r.bar:Set(m.skill, 300); r.bar:Show()
+                local label = ns.Short(m.name) .. (self.query ~= "" and (MUTED_HEX .. "  " .. m.prof .. "|r") or "")
+                r.name:SetText(label); r.skill:SetText(tostring(m.skill)); r.bar:Set(m.skill, 300); r.bar:Show()
             else
                 r.name:SetText(""); r.skill:SetText(""); r.bar:Hide()
             end
@@ -418,6 +598,7 @@ local SETTINGS = {
     { key = "quests", label = "Quest turn-ins", tip = "Every quest you hand in. Can get chatty.", options = ON_OFF },
     { key = "tiers", label = "Profession skill tiers", tip = "When a profession reaches one of your guild's skill tiers.",
       options = { { true, "At the guild's tiers" }, { false, "Off" } } },
+    { key = "mounts", label = "Mounts", tip = "Say it in guild chat when you get your first mount and your epic mount.", options = ON_OFF },
     { key = "toasts", label = "Pop-ups for guildmates", tip = "Small pop-ups when a guildmate levels, loots an epic or a boss falls.", options = ON_OFF },
     { key = "minimap", label = "Minimap button", tip = "The GM button by your minimap. Drag it to move it.", options = ON_OFF,
       set = function(v) ns.Set("minimap", v); if ns.UpdateMinimap then ns.UpdateMinimap() end end },
@@ -439,11 +620,11 @@ local function BuildSettings(page)
     local card = Card(page, "What you share")
     card:SetPoint("TOPLEFT", 0, 0)
     card:SetPoint("TOPRIGHT", 0, 0)
-    card:SetHeight(32 + #SETTINGS * 28 + 4)
+    card:SetHeight(32 + #SETTINGS * 26 + 4)
     page.selectors = {}
     local refreshers = {}
     for i, def in ipairs(SETTINGS) do
-        local y = -32 - (i - 1) * 28
+        local y = -32 - (i - 1) * 26
         local label = Text(card, "GameFontHighlightSmall", C.text)
         label:SetPoint("TOPLEFT", 12, y - 4)
         label:SetText(def.label .. (def.tip and (" " .. MUTED_HEX .. "(?)|r") or ""))
@@ -593,8 +774,8 @@ local function BuildWindow()
     title:SetPoint("TOPLEFT", side, "TOPRIGHT", 18, -14)
     win.title = title
 
-    local builders = { overview = BuildOverview, race = BuildRace, crafters = BuildCrafters,
-                       week = BuildWeek, settings = BuildSettings }
+    local builders = { overview = BuildOverview, race = BuildRace, raids = BuildRaids, groups = BuildGroups,
+                       crafters = BuildCrafters, week = BuildWeek, settings = BuildSettings }
     for _, def in ipairs(PAGE_ORDER) do
         local page = CreateFrame("Frame", nil, win)
         page:SetPoint("TOPLEFT", side, "TOPRIGHT", 16, -44)
@@ -643,6 +824,8 @@ local ICONS = {
     S = "Interface\\Icons\\Trade_BlackSmithing",
     I = "Interface\\Icons\\INV_Misc_Bag_10",
     B = "Interface\\Icons\\INV_Misc_Head_Dragon_01",
+    M = "Interface\\Icons\\Ability_Mount_RidingHorse",
+    A = "Interface\\Icons\\INV_Misc_Key_14",
 }
 
 local function BuildToast()
@@ -715,6 +898,11 @@ function ns.OnMoment(kind, who, a, b, c)
             icon = (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(tonumber(a))) or (GetItemIcon and GetItemIcon(tonumber(a)))
         end)
         ns.Toast(icon or ICONS.I, "Epic loot!", name .. " got |cff" .. (QUALITY_HEX[q] or "a335ee") .. "[" .. tostring(c or "an item") .. "]|r")
+    elseif kind == "M" then
+        ns.Toast(ICONS.M, a == "epic" and "Epic mount!" or "First mount!",
+            name .. (a == "epic" and " is riding an epic mount" or " got their first mount"))
+    elseif kind == "A" then
+        ns.Toast(ICONS.A, "Attuned!", name .. " is attuned: " .. (KEY_NAMES[a] or tostring(a)))
     elseif kind == "B" then
         if lastBoss[a] and GetTime() - lastBoss[a] < 120 then return end   -- one toast per kill
         lastBoss[a] = GetTime()
