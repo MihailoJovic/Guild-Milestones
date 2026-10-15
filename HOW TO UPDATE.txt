@@ -1,20 +1,15 @@
 FIRST TIME
-1. Install Python from python.org (tick "Add python.exe to PATH").
-2. Download the app: github.com/MihailoJovic/Guild-Milestones > green Code button > Download ZIP.
-   Unzip it into a folder you'll keep, e.g. Documents\GuildMilestones-app
-3. Double-click GuildMilestones.pyw. (Right-click it > Send to > Desktop for a shortcut.)
-4. Discord page: paste your webhook. Game & addon page: click "Find it for me", pick the
-   WoW: Forever folder, then click "Install / update addon".
-5. In the game type /reload.
+1. Go to github.com/MihailoJovic/Guild-Milestones/releases/latest and download GuildMilestones.exe.
+2. Put it in a folder you'll keep, e.g. Documents\Guild Milestones. (Right-click it > Send to > Desktop for a shortcut.)
+3. Double-click it. If Windows says "Windows protected your PC": More info > Run anyway.
+4. Follow the "Get set up" checklist on the Home page.
 
 UPDATING LATER (one click)
-When a new version exists, an "Update to vX" button appears at the top of the app.
+When a new version exists, a blue "Update to vX" button appears at the bottom left of the app.
 Click it. The app downloads the update, restarts, and refreshes the addon in your game folder.
 Then type /reload in the game.
 
 Your settings and the app's memory live in %APPDATA%\GuildMilestones, so updating never wipes them.
 
 ONE APP, ONE FOLDER
-Keep only ONE copy of the app. To see which folder your desktop shortcut uses, right-click the shortcut
-and choose Properties, then Open File Location. (The Setup tab also shows the folder it runs from.)
-If an update ever fails, unzip the newest kit into that same folder and choose "Replace the files".
+Keep only ONE copy of the app. The Game & addon page shows the folder it runs from.
