@@ -3,7 +3,8 @@ FIRST TIME
 2. Download the app: github.com/MihailoJovic/Guild-Milestones > green Code button > Download ZIP.
    Unzip it into a folder you'll keep, e.g. Documents\GuildMilestones-app
 3. Double-click GuildMilestones.pyw. (Right-click it > Send to > Desktop for a shortcut.)
-4. Setup tab: paste your webhook, pick your game folder, click "Install / update addon".
+4. Discord page: paste your webhook. Game & addon page: click "Find it for me", pick the
+   WoW: Forever folder, then click "Install / update addon".
 5. In the game type /reload.
 
 UPDATING LATER (one click)

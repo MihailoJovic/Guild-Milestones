@@ -1,19 +1,23 @@
--- Guild Milestones 0.8.0
+-- Guild Milestones 0.9.0
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
 --     the level cap and profession skill tiers. The official Discord <-> guild chat link
 --     carries those lines to your Discord, so it is real time and needs no app.
 --   * Keeps a snapshot of the guild roster for the optional companion app (officers).
---   * /gms crafters <profession> and /gms week show guild info in your chat window.
+--   * /gms opens the Guild Milestones window (UI.lua): your progress, the guild race, crafters,
+--     the week and the settings. Guildmates' milestones pop up as small toasts.
 --
--- Everything can be changed (or switched off) in Options > AddOns > Guild Milestones, or with /gms.
+-- Everything can be changed (or switched off) in the window's Settings tab.
+
+local _, ns = ...
+ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.8.0"
+local VERSION = "0.9.0"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
-local TAG = "|cff33ff99Guild Milestones|r "
+local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
 local MIN_GAP = 10                    -- ignore roster events closer together than this
 local lastScan = 0
@@ -27,6 +31,7 @@ local DEFAULTS = {
     tiers = true,
     tierList = "75, 150, 225, 300",
     snapshot = true,                  -- keep guild data for the companion app
+    toasts = true,                    -- small pop-ups when a guildmate hits a milestone
     lvlMode = "guild",                -- guild = the guild's milestone levels, every = each level, off
     lootMin = 3,                      -- -1 off, 0 any, 2 uncommon, 3 rare, 4 epic, 5 legendary
     deaths = false,
@@ -158,13 +163,53 @@ end
 
 -- ------------------------------------------------------------- chat shouting
 local outbox, pumping = {}, false
+local held = {}                       -- addon messages waiting for chat restrictions to lift
+local tries = 0
+
+-- Values the game hides from addons (Midnight's "secret values", which also apply in WoW: Forever).
+local function Secret(v)
+    return issecretvalue ~= nil and issecretvalue(v) and true or false
+end
+
+-- True while the game blocks addons from sending chat (e.g. during some instance encounters).
+local function ChatLocked()
+    local ok, locked = pcall(function()
+        return C_ChatInfo and C_ChatInfo.InChatMessagingLockdown and C_ChatInfo.InChatMessagingLockdown()
+    end)
+    return ok and locked == true
+end
+
+local function SendHidden(payload)
+    return pcall(function()
+        if C_ChatInfo and C_ChatInfo.SendAddonMessage then
+            C_ChatInfo.SendAddonMessage(PREFIX, payload, "GUILD")
+        elseif SendAddonMessage then
+            SendAddonMessage(PREFIX, payload, "GUILD")
+        end
+    end)
+end
+
+local function FlushHeld()
+    if ChatLocked() then return end
+    while held[1] do SendHidden(table.remove(held, 1)) end
+end
 
 local function Pump()
-    local text = table.remove(outbox, 1)
-    if not text then pumping = false; return end
+    FlushHeld()
+    local text = outbox[1]
+    if not text then pumping = held[1] ~= nil; if pumping then After(10, Pump) end; return end
+    if ChatLocked() then After(10, Pump); return end      -- wait it out, nothing is lost
     local channel = (S("channel") == "OFFICER") and "OFFICER" or "GUILD"
-    if IsInGuild() then pcall(SendChatMessage, text, channel) end
-    After(2, Pump)                    -- spaced out so a burst never trips chat throttling
+    local ok = true
+    if IsInGuild() then ok = pcall(SendChatMessage, text, channel) end
+    if ok or tries >= 5 then
+        table.remove(outbox, 1)
+        tries = 0
+        After(2, Pump)                -- spaced out so a burst never trips chat throttling
+    else
+        tries = tries + 1             -- blocked for now: try the same line again a bit later
+        After(10, Pump)
+    end
 end
 
 local function Shout(text)
@@ -174,13 +219,12 @@ end
 
 local function Tell(payload)          -- hidden message to other copies of the addon
     if not IsInGuild() then return end
-    pcall(function()
-        if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-            C_ChatInfo.SendAddonMessage(PREFIX, payload, "GUILD")
-        elseif SendAddonMessage then
-            SendAddonMessage(PREFIX, payload, "GUILD")
-        end
-    end)
+    if ChatLocked() then
+        if #held < 50 then held[#held + 1] = payload end
+        if not pumping then pumping = true; After(10, Pump) end
+        return
+    end
+    SendHidden(payload)
 end
 
 -- A short log of what has been announced, so the companion app never posts the same thing twice.
@@ -191,7 +235,13 @@ local function Record(kind, who, a, b)
     while #db.heard > 300 do table.remove(db.heard, 1) end
 end
 
+-- Tell the window (UI.lua) something worth a pop-up happened. Never fatal.
+local function Moment(kind, who, a, b, c)
+    if ns.OnMoment and S("toasts") then pcall(ns.OnMoment, kind, who, a, b, c) end
+end
+
 local function Announce(kind, a, b, text)
+    Moment(kind, UnitName("player"), a, b)
     if not S("shout") or not IsInGuild() then return end
     local me = UnitName("player")
     Shout(text)
@@ -245,6 +295,23 @@ local function Event(kind, a, b, c)
 end
 
 local QUALITY_BY_COLOR = { ["9d9d9d"] = 0, ["ffffff"] = 1, ["1eff00"] = 2, ["0070dd"] = 3, ["a335ee"] = 4, ["ff8000"] = 5 }
+local GetItemInfoFn = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+
+-- Item quality: old links carry a colour (|cff0070dd), modern ones a quality code (|cnIQ3:).
+-- If neither is there, ask the game.
+local function ItemQuality(link)
+    local color = link:match("^|cff(%x%x%x%x%x%x)")
+    if color and QUALITY_BY_COLOR[color:lower()] then return QUALITY_BY_COLOR[color:lower()] end
+    local iq = link:match("^|cnIQ(%d+):")
+    if iq then return tonumber(iq) end
+    local ok, q = pcall(function()
+        if C_Item and C_Item.GetItemQualityByID then return C_Item.GetItemQualityByID(link) end
+    end)
+    if ok and tonumber(q) then return tonumber(q) end
+    local ok2, _, _, q2 = pcall(GetItemInfoFn or GetItemInfo, link)
+    if ok2 and tonumber(q2) then return tonumber(q2) end
+    return nil
+end
 local QUALITY_NAME = { [0] = "Poor", "Common", "Uncommon", "Rare", "Epic", "Legendary" }
 
 local function LootPatterns()
@@ -263,7 +330,7 @@ local lootPatterns
 
 local function OnLoot(text)
     local minQ = tonumber(S("lootMin")) or -1
-    if minQ < 0 or type(text) ~= "string" then return end
+    if minQ < 0 or type(text) ~= "string" or Secret(text) then return end
     lootPatterns = lootPatterns or LootPatterns()
     local got
     for _, pat in ipairs(lootPatterns) do
@@ -271,14 +338,14 @@ local function OnLoot(text)
         if got then break end
     end
     if not got then return end
-    local link = got:match("|c%x+|Hitem:.-|h%[.-%]|h|r") or got:match("|Hitem:.-|h%[.-%]|h")
+    local link = got:match("|c[^|]*|Hitem:.-|h%[.-%]|h|r") or got:match("|Hitem:.-|h%[.-%]|h")
     if not link then return end
-    local color = link:match("|cff(%x%x%x%x%x%x)")
-    local q = color and QUALITY_BY_COLOR[color:lower()]
+    local q = ItemQuality(link)
     if not q or q < minQ then return end
-    local detail = QUALITY_NAME[q]
-    local ok, itemName, _, _, ilvl = pcall(GetItemInfo, link)
-    if ok and tonumber(ilvl) and ilvl > 1 then detail = detail .. ", ilvl " .. ilvl else ilvl = nil end
+    local detail = QUALITY_NAME[q] or ("Quality " .. q)
+    local ok, itemName, _, _, ilvl = pcall(GetItemInfoFn or GetItemInfo, link)
+    ilvl = ok and tonumber(ilvl) or nil
+    if ilvl and ilvl > 1 then detail = detail .. ", ilvl " .. ilvl else ilvl = nil end
     local id = link:match("|Hitem:(%d+)")
     Event("I", id, q .. ":" .. (ilvl or 0), (ok and itemName) or link:match("%[(.-)%]"))
     Chat(Fill(S("lootMsg"), { name = UnitName("player"), item = link }) .. " (" .. detail .. ")", true)
@@ -291,10 +358,18 @@ local function OnDeath()
     Chat(Fill(S("deathMsg"), { name = UnitName("player"), zone = zone ~= "" and zone or "the wilds" }), true)
 end
 
+-- One shout per kill: the group leader's (or yours when you're on your own).
+local function ShoutsForGroup()
+    local ok, grouped = pcall(function() return IsInGroup and IsInGroup() end)
+    if not ok or not grouped then return true end
+    local ok2, lead = pcall(function() return UnitIsGroupLeader and UnitIsGroupLeader("player") end)
+    return ok2 and lead and true or false
+end
+
 local function OnBoss(_, name, _, size, success)
-    if not S("bosses") or tonumber(success) ~= 1 or not name then return end
+    if not S("bosses") or tonumber(success) ~= 1 or not name or Secret(name) then return end
     Event("B", name, size)
-    Chat(Fill(S("bossMsg"), { name = UnitName("player"), boss = name }))
+    if ShoutsForGroup() then Chat(Fill(S("bossMsg"), { name = UnitName("player"), boss = name })) end
 end
 
 local function OnQuest(questID)
@@ -310,6 +385,26 @@ end
 -- -------------------------------------------------------- profession skills
 local skills, skillsReady, skillTimer = {}, false, false
 
+-- The skill list as (count, row function). WoW: Forever has C_SkillInfo in place of the old globals.
+local function SkillLineSource()
+    if GetNumSkillLines and GetSkillLineInfo then
+        return GetNumSkillLines(), function(i)
+            local name, header, _, rank = GetSkillLineInfo(i)
+            return name, header, rank
+        end
+    end
+    if C_SkillInfo and C_SkillInfo.GetNumSkillLines and C_SkillInfo.GetSkillLineInfo then
+        return C_SkillInfo.GetNumSkillLines(), function(i)
+            local a, b, _, d = C_SkillInfo.GetSkillLineInfo(i)
+            if type(a) == "table" then
+                return a.skillName or a.name, a.isHeader or a.header, a.skillRank or a.rank
+            end
+            return a, b, d
+        end
+    end
+    return 0, nil
+end
+
 local function ReadSkills()
     local out = {}
     if GetProfessions and GetProfessionInfo then
@@ -320,21 +415,23 @@ local function ReadSkills()
                 if name and rank then out[name] = rank end
             end
         end
-    elseif GetNumSkillLines and GetSkillLineInfo then
-        local inProfessions = false
-        local wanted = {}
-        for _, g in ipairs({ "TRADE_SKILLS", "SECONDARY_SKILLS" }) do
-            local v = rawget(_G, g)
-            if v then wanted[v:lower()] = true end
-        end
-        for i = 1, GetNumSkillLines() do
-            local name, header, _, rank = GetSkillLineInfo(i)
-            if header then
-                local h = tostring(name):lower()
-                inProfessions = wanted[h] or h:find("profession", 1, true) or h:find("secondary", 1, true) or false
-            elseif inProfessions and name and rank then
-                out[name] = rank
-            end
+    end
+    if next(out) then return out end
+    local count, row = SkillLineSource()
+    if not row then return out end
+    local inProfessions = false
+    local wanted = {}
+    for _, g in ipairs({ "TRADE_SKILLS", "SECONDARY_SKILLS" }) do
+        local v = rawget(_G, g)
+        if v then wanted[v:lower()] = true end
+    end
+    for i = 1, tonumber(count) or 0 do
+        local name, header, rank = row(i)
+        if header then
+            local h = tostring(name):lower()
+            inProfessions = wanted[h] or h:find("profession", 1, true) or h:find("secondary", 1, true) or false
+        elseif inProfessions and name and tonumber(rank) then
+            out[name] = tonumber(rank)
         end
     end
     return out
@@ -343,6 +440,7 @@ end
 local function CheckSkills(announce)
     local ok, now = pcall(ReadSkills)
     if not ok then return end
+    if next(now) == nil and next(skills) ~= nil then return end     -- an empty read is a hiccup, not a reset
     if announce and S("tiers") then
         local tiers = NumSet(S("tierList"))
         for prof, rank in pairs(now) do
@@ -446,6 +544,30 @@ local function Scan(force)
     db.updated = time()
     db.scanner = UnitName("player")
     db.addon = VERSION
+    local okG, gname = pcall(function() return GetGuildInfo and GetGuildInfo("player") end)
+    db.guild = (okG and type(gname) == "string" and not Secret(gname)) and gname or nil
+end
+
+-- ---------------------------------------------------------- version notice
+-- Copies of the addon tell each other their version, so an old copy can say "there's a newer one".
+-- It only prints one line in your own chat window, once per session.
+local function VerNum(v)
+    local a, b, c = tostring(v or ""):match("^(%d+)%.(%d+)%.?(%d*)")
+    if not a then return 0 end
+    return tonumber(a) * 10000 + tonumber(b) * 100 + (tonumber(c) or 0)
+end
+local toldNewer, lastReply = false, nil
+
+local function OnVersion(theirs, sender)
+    local mine, v = VerNum(VERSION), VerNum(theirs)
+    if v > mine and not toldNewer then
+        toldNewer = true
+        Say("A newer version (v%s) is out, and %s already has it. Grab it from the same place you got this one.",
+            theirs, Short(sender))
+    elseif v > 0 and v < mine and (not lastReply or GetTime() - lastReply > 600) then
+        lastReply = GetTime()
+        Tell("V|" .. VERSION)       -- let the older copy know (at most every 10 minutes)
+    end
 end
 
 -- ------------------------------------------------------------ chat commands
@@ -519,20 +641,19 @@ local function Preview()
     print("  Level milestones: " .. tostring(S("levels")) .. "   Skill tiers: " .. tostring(S("tierList")))
 end
 
-local optionsOpen                       -- filled in by the settings panel
-
 local function Help()
     local db = GuildMilestonesDB
     Say("%s  |  shouting is %s (%s)", VERSION, S("shout") and "|cff33ff99ON|r" or "|cffff5555OFF|r",
         (S("channel") == "OFFICER") and "officer chat" or "guild chat")
-    print("  /gms options        open the settings")
+    print("  /gms                open the Guild Milestones window")
+    print("  /gms options        the window's Settings tab")
     print("  /gms shout on|off   announce my milestones in chat")
     print("  /gms test           preview the messages, sends nothing")
     print("  /gms guild          which milestones your guild chose")
     print("  /gms publish        (officers) put the app's milestone settings into Guild Info")
     print("  /gms crafters <p>   who in the guild crafts a profession")
     print("  /gms week           this week's guild summary (needs the companion app)")
-    print("  /gms save           write the guild snapshot now (reloads your UI)")
+    print("  /gms save           get the guild snapshot ready (then type /reload)")
     print("  Snapshot: " .. (db.members and #db.members or 0) .. " members, last "
           .. (db.updated and date("%H:%M:%S", db.updated) or "none yet") .. ". More: /gms scan, /gms profs")
 end
@@ -542,10 +663,12 @@ SLASH_GUILDMILESTONES2 = "/guildmilestones"
 SlashCmdList["GUILDMILESTONES"] = function(msg)
     local cmd, rest = tostring(msg or ""):match("^%s*(%S*)%s*(.-)%s*$")
     cmd = (cmd or ""):lower()
-    if cmd == "" or cmd == "help" or cmd == "status" then
+    if cmd == "" and ns.Open then
+        ns.Open()
+    elseif cmd == "" or cmd == "help" or cmd == "status" then
         Help()
     elseif cmd == "options" or cmd == "settings" or cmd == "config" then
-        if optionsOpen then optionsOpen() else Say("The settings panel isn't available on this client. Use the /gms commands.") end
+        if ns.Open then ns.Open("settings") else Help() end
     elseif cmd == "shout" then
         local a = rest:lower()
         if a == "on" or a == "off" then
@@ -580,9 +703,8 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
             Say("Level cap is %s. Use /gms maxlevel 60 (or 0 for automatic).", tostring(MaxLevel() or "unknown"))
         end
     elseif cmd == "save" or cmd == "flush" then
-        Say("saving and reloading your UI...")
-        Scan(true)
-        ReloadUI()
+        Scan(true)            -- ReloadUI() is blocked for addons on WoW: Forever, so the player reloads
+        Say("Snapshot ready. Now type /reload so the game writes it to disk for the app.")
     elseif cmd == "scan" then
         RequestRoster()
         Say("asked the game for a fresh roster.")
@@ -604,133 +726,20 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
     end
 end
 
--- ------------------------------------------------------------ settings panel
-local function BuildPanel()
-    local panel = CreateFrame("Frame")
-    panel.name = "Guild Milestones"
-    local refreshers = {}
-
-    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", 16, -16)
-    title:SetText("Guild Milestones " .. VERSION)
-
-    local y = -52
-    local function Heading(text)
-        local fs = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-        fs:SetPoint("TOPLEFT", 16, y)
-        fs:SetText(text)
-        y = y - 30
+-- ------------------------------------------------- shared with the window (UI.lua)
+ns.VERSION, ns.S, ns.Set, ns.Say, ns.Short, ns.NumSet = VERSION, S, Set, Say, Short, NumSet
+ns.MaxLevel, ns.Preview, ns.ReadGuildConfig, ns.RequestRoster = MaxLevel, Preview, ReadGuildConfig, RequestRoster
+ns.QUALITY_NAME = QUALITY_NAME
+function ns.GuildConfig() return guildCfg end
+function ns.Professions()                -- live guild professions, or the last saved ones
+    local ok, rows = pcall(ProfessionRows)
+    if ok and #rows > 0 then return rows, "live" end
+    rows = {}
+    for _, line in ipairs(GuildMilestonesDB.profs or {}) do
+        local pr, n, sk = line:match("^([^|]*)|([^|]*)|(%d+)$")
+        if pr then rows[#rows + 1] = { prof = pr, name = n, skill = tonumber(sk) } end
     end
-
-    -- A row with a label on the left and a < value > stepper on the right.
-    local function Stepper(label, options, get, set)
-        local fs = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-        fs:SetPoint("TOPLEFT", 34, y)
-        fs:SetText(label)
-        local left = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-        left:SetSize(24, 22); left:SetPoint("TOPLEFT", 250, y + 5); left:SetText("<")
-        local val = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-        val:SetPoint("TOPLEFT", 280, y)
-        val:SetWidth(190)
-        local right = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-        right:SetSize(24, 22); right:SetPoint("TOPLEFT", 476, y + 5); right:SetText(">")
-        local function index()
-            local cur = get()
-            for i, o in ipairs(options) do if o[1] == cur then return i end end
-            return 1
-        end
-        local function show() val:SetText(options[index()][2]) end
-        local function step(d)
-            local i = index() + d
-            if i < 1 then i = #options elseif i > #options then i = 1 end
-            set(options[i][1]); show()
-        end
-        left:SetScript("OnClick", function() step(-1) end)
-        right:SetScript("OnClick", function() step(1) end)
-        refreshers[#refreshers + 1] = show
-        y = y - 30
-    end
-
-    local function Check(label, key)
-        local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-        cb:SetPoint("TOPLEFT", 28, y + 6)
-        local fs = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-        fs:SetPoint("LEFT", cb, "RIGHT", 4, 0)
-        fs:SetText(label)
-        cb:SetScript("OnClick", function(self) Set(key, self:GetChecked() and true or false) end)
-        refreshers[#refreshers + 1] = function() cb:SetChecked(S(key) and true or false) end
-        y = y - 30
-    end
-
-    local onOff = { { false, "Off" }, { true, "On" } }
-    Heading("Announcements in chat (this character)")
-    Stepper("Announce in", { { "OFF", "Nowhere (off)" }, { "GUILD", "Guild chat" }, { "OFFICER", "Officer chat" } },
-        function() return S("shout") and S("channel") or "OFF" end,
-        function(v)
-            if v == "OFF" then Set("shout", false) else Set("shout", true); Set("channel", v) end
-        end)
-    Stepper("Level-ups", { { "guild", "Guild milestones" }, { "every", "Every level" }, { "off", "Off" } },
-        function() return S("lvlMode") end, function(v) Set("lvlMode", v) end)
-    Stepper("Loot", { { -1, "Off" }, { 0, "Everything" }, { 2, "Uncommon (green) or better" }, { 3, "Rare (blue) or better" },
-                      { 4, "Epic (purple) or better" }, { 5, "Legendary only" } },
-        function() return tonumber(S("lootMin")) or -1 end, function(v) Set("lootMin", v) end)
-    Stepper("Deaths", onOff, function() return S("deaths") and true or false end, function(v) Set("deaths", v) end)
-    Stepper("Boss kills", onOff, function() return S("bosses") and true or false end, function(v) Set("bosses", v) end)
-    Stepper("Quest turn-ins", onOff, function() return S("quests") and true or false end, function(v) Set("quests", v) end)
-    Stepper("Skill-ups", { { true, "At the guild's skill tiers" }, { false, "Off" } },
-        function() return S("tiers") and true or false end, function(v) Set("tiers", v) end)
-
-    y = y - 8
-    local info = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-    info:SetPoint("TOPLEFT", 34, y)
-    info:SetWidth(470)
-    info:SetJustifyH("LEFT")
-    refreshers[#refreshers + 1] = function()
-        ReadGuildConfig()
-        local cap = tonumber(S("maxLevel")) or 0
-        local head = guildCfg.L and "|cff33ff99Chosen by your guild:|r" or "|cffaaaaaaDefaults (your guild hasn't chosen yet):|r"
-        info:SetText(head .. " levels " .. (tostring(S("levels")) ~= "" and tostring(S("levels")) or "none")
-            .. ", cap " .. (cap > 0 and cap or "set by the game")
-            .. ", skill tiers " .. (tostring(S("tierList")) ~= "" and tostring(S("tierList")) or "none")
-            .. "\n|cffaaaaaaYour guild officers change these in the companion app.|r")
-    end
-    y = y - 52
-
-    Heading("Companion app")
-    Check("Keep guild data for the companion app (officers)", "snapshot")
-
-    local test = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    test:SetSize(140, 24)
-    test:SetPoint("TOPLEFT", 34, y - 6)
-    test:SetText("Preview messages")
-    test:SetScript("OnClick", Preview)
-
-    local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    reset:SetSize(140, 24)
-    reset:SetPoint("LEFT", test, "RIGHT", 10, 0)
-    reset:SetText("Reset to defaults")
-    reset:SetScript("OnClick", function()
-        GuildMilestonesDB.settings = {}
-        for _, fn in ipairs(refreshers) do fn() end
-        Say("settings reset to defaults.")
-    end)
-
-    local function refresh() for _, fn in ipairs(refreshers) do fn() end end
-    panel:SetScript("OnShow", refresh)
-    panel.refresh = refresh
-    refresh()
-
-    if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
-        local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
-        Settings.RegisterAddOnCategory(category)
-        optionsOpen = function() Settings.OpenToCategory(category:GetID()) end
-    elseif InterfaceOptions_AddCategory then
-        InterfaceOptions_AddCategory(panel)
-        optionsOpen = function()
-            InterfaceOptionsFrame_OpenToCategory(panel)
-            InterfaceOptionsFrame_OpenToCategory(panel)     -- the old frame needs it twice
-        end
-    end
+    return rows, "saved"
 end
 
 -- ------------------------------------------------------------------- events
@@ -740,7 +749,8 @@ f:RegisterEvent("PLAYER_LEVEL_UP")
 f:RegisterEvent("GUILD_ROSTER_UPDATE")
 f:RegisterEvent("PLAYER_LOGOUT")
 for _, ev in ipairs({ "GUILD_TRADESKILL_UPDATE", "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "CHAT_MSG_ADDON",
-                      "CHAT_MSG_LOOT", "PLAYER_DEAD", "ENCOUNTER_END", "QUEST_TURNED_IN" }) do
+                      "CHAT_MSG_LOOT", "PLAYER_DEAD", "ENCOUNTER_END", "QUEST_TURNED_IN",
+                      "ADDON_RESTRICTION_STATE_CHANGED" }) do
     pcall(f.RegisterEvent, f, ev)       -- not every client has every event
 end
 
@@ -756,7 +766,7 @@ f:SetScript("OnEvent", function(_, event, ...)
             end
         end)
         guildCfg = GuildMilestonesDB.guildCfg or {}      -- last known guild settings, until the game has them
-        pcall(BuildPanel)
+        if ns.BuildUI then pcall(ns.BuildUI) end
         After(5, ReadGuildConfig)
         After(15, function() ReadGuildConfig(); if not publishedOnce then pcall(PublishConfig, false) end end)
         if S("snapshot") then RequestRoster() end
@@ -764,13 +774,14 @@ f:SetScript("OnEvent", function(_, event, ...)
             C_Timer.NewTicker(SCAN_INTERVAL, function() if S("snapshot") then RequestRoster() end end)
         end
         After(8, function() CheckSkills(false); skillsReady = true end)   -- baseline, announces nothing
+        After(20, function() Tell("V|" .. VERSION) end)                    -- for the "newer version" notice
         After(6, function()
             if IsInGuild() then
                 if S("shout") then
-                    Say("%s ready. Your level and skill milestones go to %s. /gms options to change.", VERSION,
+                    Say("v%s ready. Your milestones go to %s. Type |cfff2b84b/gms|r to open the window.", VERSION,
                         (S("channel") == "OFFICER") and "officer chat" or "guild chat")
                 else
-                    Say("%s ready. Announcing is OFF. /gms options to change.", VERSION)
+                    Say("v%s ready. Announcing is OFF. Type |cfff2b84b/gms|r to open the window.", VERSION)
                 end
             end
         end)
@@ -788,19 +799,35 @@ f:SetScript("OnEvent", function(_, event, ...)
         SkillsChanged()
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
-        if prefix == PREFIX and channel == "GUILD" and S("snapshot")
-           and Short(sender) ~= Short(UnitName("player")) then
+        if Secret(prefix) or Secret(text) or Secret(sender) then return end
+        local ver = prefix == PREFIX and tostring(text):match("^V|(%d+%.%d+%.?%d*)$")
+        if ver then
+            if Short(sender) ~= Short(UnitName("player")) then OnVersion(ver, sender) end
+            return
+        end
+        if prefix == PREFIX and channel == "GUILD" and Short(sender) ~= Short(UnitName("player")) then
+            local keep = S("snapshot")
             local row = tostring(text):match("^E|(.+)$")
             local who, lvl = tostring(text):match("^L|([^|]+)|(%d+)$")
             if row then
-                if row:match("^%a|[^|]+|%d+|") then RecordEvent(row) end
+                local k, w, _, a, b, c = row:match("^(%a)|([^|]+)|(%d+)|([^|]*)|([^|]*)|?(.*)$")
+                if k then
+                    if keep then RecordEvent(row) end
+                    Moment(k, w, a, b, c)
+                end
             elseif who then
-                Record("L", who, lvl)
+                if keep then Record("L", who, lvl) end
+                Moment("L", who, tonumber(lvl))
             else
                 local w, prof, tier = tostring(text):match("^S|([^|]+)|([^|]+)|(%d+)$")
-                if w then Record("S", w, prof, tier) end
+                if w then
+                    if keep then Record("S", w, prof, tier) end
+                    Moment("S", w, prof, tonumber(tier))
+                end
             end
         end
+    elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
+        if (outbox[1] or held[1]) and not pumping then pumping = true; After(1, Pump) end
     elseif event == "PLAYER_LOGOUT" then
         Scan(true)
     else

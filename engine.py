@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.9.0"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -31,6 +31,7 @@ def _migrate_old_files():
 
 _migrate_old_files()
 POLL_SECONDS = 15
+MAX_OUTBOX = 60           # announcements kept waiting when Discord can't be reached
 MAX_WELCOMES = 5          # more brand-new names than this at once = probably a roster hiccup, so stay quiet
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 TIER_NAMES = {75: "Journeyman", 150: "Expert", 225: "Artisan", 300: "Master"}
@@ -45,7 +46,7 @@ DEFAULTS = {
     "auto_start": False, "auto_update_addon": True,
     "shared_on": False, "shared_url": "", "shared_token": "", "my_name": "", "device_id": "",
     "announce_levels": True, "announce_firsts": True, "announce_tiers": True,
-    "welcome_new": True, "digest_enabled": True, "skip_shouted": True,
+    "welcome_new": True, "welcome_back": True, "digest_enabled": True, "ladder_enabled": True, "skip_shouted": False,
     "event_loot": True, "event_boss": True, "event_death": False, "event_quest": False, "loot_min_quality": 3,
     "milestones": "10, 20, 30, 40, 50, 60", "max_level": 60, "tiers": "75, 150, 225, 300",
     "week_start": 0,
@@ -55,14 +56,48 @@ DEFAULTS = {
             "20=Tip: shout in guild chat for a dungeon group. Someone's usually keen.",
 }
 _LOCK = threading.Lock()
+CONFIG_REV = 2            # bump when an old saved setting must be changed once for everyone
+WELCOME_BACK_DAYS = 14    # away at least this long = "welcome back" post
 
 
 # ----------------------------- small helpers -----------------------------
-def load_config():
+def _write_json(path, data):
+    """Write to a temporary file first, then swap it in, so a crash never leaves half a file."""
+    tmp = Path(path).with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_json(path):
+    """The saved dict, or None if there's no file. A damaged file is kept aside (never silently lost)."""
+    path = Path(path)
+    if not path.exists():
+        return None
     try:
-        cfg = {**DEFAULTS, **json.loads(CONFIG_FILE.read_text(encoding="utf-8"))}
-    except Exception:
-        cfg = dict(DEFAULTS)
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        keep = path.with_name(f"{path.stem}.damaged-{datetime.now():%Y%m%d-%H%M%S}{path.suffix}")
+        try:
+            shutil.copy2(path, keep)
+        except Exception:
+            pass
+        log_error(f"{path.name} couldn't be read ({e!r}); a copy was kept as {keep.name}")
+        return None
+
+
+def load_config():
+    saved = _read_json(CONFIG_FILE) or {}
+    cfg = {**DEFAULTS, **saved}
+    if int(saved.get("cfg_rev", 0) or 0) < CONFIG_REV:
+        # v0.9.0: "skip what the addon already shouted" now starts off, because nobody has confirmed that
+        # Blizzard's Discord link carries addon lines on WoW: Forever. Officers can switch it back on.
+        cfg["skip_shouted"] = False
+        cfg["cfg_rev"] = CONFIG_REV
+        if saved:
+            try:
+                save_config(cfg)
+            except Exception:
+                pass
     if not cfg["game_folder"] and cfg["savedvars"]:
         cfg["game_folder"] = game_folder_from(cfg["savedvars"])
     if not cfg["my_name"]:
@@ -77,7 +112,7 @@ def load_config():
 
 
 def save_config(cfg):
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
+    _write_json(CONFIG_FILE, {**cfg, "cfg_rev": CONFIG_REV})
 
 
 def nums(text):
@@ -152,7 +187,9 @@ def parse_file(path):
             pass
     m = re.search(r'\["updated"\]\s*=\s*(\d+)', text)
     updated = int(m.group(1)) if m else int(Path(path).stat().st_mtime)
+    g = re.search(r'\["guild"\]\s*=\s*"((?:[^"\\\n]|\\.)*)"', text)
     return {"members": members, "profs": profs, "heard": heard, "events": events, "updated": updated,
+            "guild": g.group(1).replace('\\"', '"') if g else "",
             "legacy": '["entries"]' in text and not members}
 
 
@@ -162,21 +199,28 @@ def week_id(now, start):
 
 
 def new_week(wid):
-    return {"id": wid, "new": [], "gains": {}, "milestones": [], "tiers": [], "loot": {}, "boss": {}}
+    return {"id": wid, "new": [], "gains": {}, "milestones": [], "tiers": [], "loot": {}, "boss": {},
+            "quests": {}, "deaths": {}, "back": []}
+
+
+def hook_key(url):
+    """A short fingerprint of a webhook URL. The URL itself is a secret, so it is never saved in the state."""
+    return hashlib.sha256(str(url).strip().encode("utf-8")).hexdigest()[:16]
 
 
 def load_state():
     st = {"initialized": False, "members": {}, "firsts": {}, "profs": {}, "crafters": {},
-          "week": new_week(""), "digest": {}}
-    try:
-        st.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-    except Exception:
-        pass
+          "week": new_week(""), "digest": {}, "ladder": {}, "outbox": []}
+    st.update(_read_json(STATE_FILE) or {})
+    for board in ("digest", "ladder"):                 # older versions stored the full webhook URL here
+        d = st.get(board) or {}
+        if d.get("url"):
+            d["hook"] = hook_key(d.pop("url"))
     return st
 
 
 def save_state(st):
-    STATE_FILE.write_text(json.dumps(st, indent=1, ensure_ascii=False), encoding="utf-8")
+    _write_json(STATE_FILE, st)
 
 
 def _seed_firsts(st, cls, level, levels):
@@ -199,11 +243,21 @@ def process(snap, state, cfg, now):
     heard_s = {(h["name"].lower(), h["prof"].lower(), h["tier"]) for h in snap.get("heard", []) if h["kind"] == "S"}
     cls_of = {short(m["name"]).lower(): m["cls"] for m in snap["members"]}
 
+    guild = snap.get("guild") or ""
+    if guild and st.get("guild") and guild != st["guild"]:
+        notes.append(f"The addon file is from a character in another guild ({guild}), so I skipped it. "
+                     f"It will be used again after you log out of a character in {st['guild']}.")
+        return state, [], notes
+    if guild:
+        st["guild"] = guild
+
     wid = week_id(now, cfg["week_start"])
     if st["week"].get("id") != wid:
         st["week"], st["digest"] = new_week(wid), {}
         notes.append("A new week has started.")
     week = st["week"]
+    for k, empty in (("quests", {}), ("deaths", {}), ("back", [])):
+        week.setdefault(k, empty)
 
     members = snap["members"]
     fresh = [m["name"] for m in members if m["name"] not in st["members"]]
@@ -221,7 +275,7 @@ def process(snap, state, cfg, now):
         rec = st["members"].get(name)
 
         if rec is None:                                         # someone new
-            st["members"][name] = {"level": level, "class": cls, "first_seen": today}
+            st["members"][name] = {"level": level, "class": cls, "first_seen": today, "off": m.get("off", 0)}
             _seed_firsts(st, cls, level, levels)
             if name not in quiet:
                 week["new"].append({"name": who, "cls": cname, "level": level})
@@ -229,6 +283,14 @@ def process(snap, state, cfg, now):
                     msgs.append({"text": fmt(cfg["welcome_msg"], name=who, level=level, cls=cname),
                                  "color": class_color(cls)})
             continue
+
+        away, now_off = rec.get("off"), m.get("off", 0)
+        if away is not None and away >= WELCOME_BACK_DAYS and now_off <= away - 7:
+            week["back"].append({"name": who, "days": away})
+            if cfg.get("welcome_back", True):
+                msgs.append({"text": f"👋 Welcome back, **{who}**! It's been {away} days. Good to see you again.",
+                             "color": class_color(cls), "silent": True})
+        rec["off"] = now_off
 
         old = rec["level"]
         rec["class"] = cls or rec.get("class", "")
@@ -284,7 +346,7 @@ def process(snap, state, cfg, now):
                 week["tiers"].append({"name": short(p["name"]), "prof": p["prof"], "tier": label})
                 if cfg["announce_tiers"] and not (skip and (short(p["name"]).lower(), p["prof"].lower(), t) in heard_s):
                     msgs.append({"text": f"🔨 **{short(p['name'])}** reached **{label}** in {p['prof']}!",
-                                 "color": class_color(cls_of.get(short(p["name"]).lower()))})
+                                 "color": class_color(cls_of.get(short(p["name"]).lower())), "silent": True})
         mine[p["prof"]] = p["skill"]
 
     if snap["profs"]:
@@ -302,6 +364,7 @@ def process(snap, state, cfg, now):
 # ------------------------------- loot, bosses, deaths, quests -------------------------------
 QUALITY_COLORS = {0: 0x9D9D9D, 1: 0xFFFFFF, 2: 0x1EFF00, 3: 0x0070DD, 4: 0xA335EE, 5: 0xFF8000}
 QUALITY_NAMES = {0: "Poor", 1: "Common", 2: "Uncommon", 3: "Rare", 4: "Epic", 5: "Legendary"}
+BOSS_WINDOW = 15 * 60     # reports of the same boss within this many seconds are one kill
 _ITEM_CACHE = {}
 
 
@@ -335,21 +398,35 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         return []
     seen_set, items, looked = set(seen), [], 0
     min_q = int(cfg.get("loot_min_quality", 3))
+    kills = {}                                             # boss -> everyone the addon heard killing it
+    wk = st.setdefault("week", {})                         # weekly leaderboard counts
+
+    def bump(cat, who):
+        wk.setdefault(cat, {})[who] = wk.setdefault(cat, {}).get(who, 0) + 1
+
     for ev, key in zip(events, keys):
         if key in seen_set:
             continue
         seen_set.add(key)
         who, color = short(ev["name"]), class_color(cls_of.get(short(ev["name"]).lower()))
         kind = ev["kind"]
-        wk = st.setdefault("week", {})                     # weekly leaderboard counts
         if kind == "I":
             try:
                 if int(ev["b"].split(":")[0]) >= 3:
-                    wk.setdefault("loot", {})[who] = wk.setdefault("loot", {}).get(who, 0) + 1
+                    bump("loot", who)
             except ValueError:
                 pass
         elif kind == "B":
-            wk.setdefault("boss", {})[who] = wk.setdefault("boss", {}).get(who, 0) + 1
+            bump("boss", who)
+        elif kind == "Q":
+            bump("quests", who)
+        elif kind == "D":
+            bump("deaths", who)
+        if kind == "B":
+            k = kills.setdefault(ev["a"], {"names": [], "ts": ev["ts"], "size": ev["b"], "color": color})
+            if who not in k["names"]:
+                k["names"].append(who)
+            continue
         if kind == "I" and cfg.get("event_loot", True):
             try:
                 q, ilvl = (int(x) for x in ev["b"].split(":"))
@@ -363,17 +440,29 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
             name = ev["c"] or info.get("name") or f"Item {item_id}"
             detail = QUALITY_NAMES.get(q, "") + (f" · item level {ilvl}" if ilvl else "")
             item = {"text": f"**{who}** looted **{name}**\n{detail}", "color": QUALITY_COLORS.get(q, color),
-                    "title": name, "url": f"https://www.wowhead.com/classic/item={item_id}"}
+                    "title": name, "url": f"https://www.wowhead.com/classic/item={item_id}", "silent": q < 4}
             if info.get("icon"):
                 item["thumb"] = info["icon"]
             items.append(item)
-        elif kind == "B" and cfg.get("event_boss", True):
-            size = f" with a group of {ev['b']}" if ev["b"].isdigit() and int(ev["b"]) > 1 else ""
-            items.append({"text": f"⚔️ **{who}** defeated **{ev['a']}**{size}!", "color": color})
         elif kind == "D" and cfg.get("event_death", False):
-            items.append({"text": f"💀 **{who}** has died in {ev['a'] or 'the wilds'}.", "color": color})
+            items.append({"text": f"💀 **{who}** has died in {ev['a'] or 'the wilds'}.", "color": color, "silent": True})
         elif kind == "Q" and cfg.get("event_quest", False):
-            items.append({"text": f"📜 **{who}** completed **{ev['a']}**.", "color": color})
+            items.append({"text": f"📜 **{who}** completed **{ev['a']}**.", "color": color, "silent": True})
+
+    # One card per boss kill, however many members' addons reported it.
+    posted = st.setdefault("boss_posted", {})
+    for boss, k in kills.items():
+        if k["ts"] - posted.get(boss, 0) < BOSS_WINDOW:
+            continue                                       # already celebrated this kill
+        posted[boss] = k["ts"]
+        if not cfg.get("event_boss", True):
+            continue
+        names = k["names"]
+        crew = ", ".join(f"**{n}**" for n in names[:-1]) + f" and **{names[-1]}**" if len(names) > 1 else f"**{names[0]}**"
+        size = f" (group of {k['size']})" if str(k["size"]).isdigit() and int(k["size"]) > len(names) else ""
+        items.append({"text": f"⚔️ **{boss}** is down! Defeated by {crew}{size}.", "color": k["color"]})
+    cutoff = max([0] + [k["ts"] for k in kills.values()]) - 86400
+    st["boss_posted"] = {b: t for b, t in posted.items() if t >= cutoff}
     st["events_seen"] = (list(seen) + [k for k in keys if k not in set(seen)])[-500:]
     return items
 
@@ -392,8 +481,10 @@ def _clip(lines, limit):
 
 def leaderboard(w):
     """Top three per category for the week: [(title, [(name, text), ...]), ...]. Empty ones are left out."""
-    cats = [("Rare+ drops", w.get("loot", {}), "drop"),
-            ("Boss kills", w.get("boss", {}), "kill")]
+    cats = [("💎 Loot Goblin · rare+ drops", w.get("loot", {}), "drop"),
+            ("⚔️ Boss Hunter", w.get("boss", {}), "kill"),
+            ("📜 Quest Machine", w.get("quests", {}), "quest"),
+            ("💀 Darwin Award", w.get("deaths", {}), "death")]
     out = []
     for title, data, unit in cats:
         top = sorted(data.items(), key=lambda kv: -kv[1])[:3]
@@ -417,11 +508,15 @@ def build_digest(st, cfg):
     ms = [f"• **{m['name']}** → Level {m['level']}" for m in w["milestones"][-10:]]
     fields.append({"name": "🎯 Milestones hit", "value": _clip(ms, 600) or "*None yet this week.*"})
 
+    back = [f"• **{b['name']}** after {b['days']} days" for b in w.get("back", [])[-8:]]
+    if back:
+        fields.append({"name": "👋 Welcome back", "value": _clip(back, 400)})
+
     medals = ["🥇", "🥈", "🥉"]
     board = [f"**{t}**\n" + "\n".join(f"{medals[i]} {n} · {txt}" for i, (n, txt) in enumerate(rows))
              for t, rows in leaderboard(w)]
     if board:
-        fields.append({"name": "🏆 Leaderboard", "value": "\n\n".join(board)[:1000]})
+        fields.append({"name": "🏆 This week's awards", "value": _clip("\n\n".join(board).split("\n"), 1000)})
 
     if w["tiers"] or st["crafters"]:
         tr = [f"• **{t['name']}** · {t['tier']} {t['prof']}" for t in w["tiers"][-8:]]
@@ -457,70 +552,117 @@ def build_digest(st, cfg):
 
 
 # --------------------------------- Discord ---------------------------------
-def _request(method, url, payload=None, timeout=15):
+SILENT = 4096            # Discord's SUPPRESS_NOTIFICATIONS flag: the post appears, but pings nobody's phone
+_sleep = time.sleep      # swapped out by tests
+
+
+def _request(method, url, payload=None, timeout=15, retries=3):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json", "User-Agent": "GuildMilestones/" + APP_VERSION})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read().decode("utf-8")
-            return r.status, (json.loads(body) if body else None), ""
-    except urllib.error.HTTPError as e:
-        detail = ""
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json", "User-Agent": "GuildMilestones/" + APP_VERSION})
         try:
-            detail = " - " + str(json.loads(e.read().decode("utf-8", "replace")))[:200]
-        except Exception:
-            pass
-        return e.code, None, f"Discord said HTTP {e.code}{detail}"
-    except Exception as e:
-        return 0, None, str(e)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read().decode("utf-8")
+                return r.status, (json.loads(body) if body else None), ""
+        except urllib.error.HTTPError as e:
+            raw, info = "", {}
+            try:
+                raw = e.read().decode("utf-8", "replace")
+                info = json.loads(raw)
+            except Exception:
+                pass
+            if e.code == 429 and attempt < retries:          # "slow down": wait as long as Discord asks
+                try:
+                    wait = float(info.get("retry_after") or e.headers.get("Retry-After") or 2)
+                except (TypeError, ValueError, AttributeError):
+                    wait = 2.0
+                _sleep(min(max(wait, 0.5), 30))
+                continue
+            detail = f" - {info.get('message') or raw[:200]}" if (info or raw) else ""
+            if e.code == 404 and "webhook" in str(info.get("message", "")).lower():
+                detail += " (the webhook was deleted: make a new one and paste it on the Setup tab)"
+            return e.code, None, f"Discord said HTTP {e.code}{detail}"
+        except Exception as e:
+            return 0, None, str(e)
+    return 429, None, "Discord kept saying 'too many requests'. I'll try again later."
 
 
-def post(url, content=None, embed=None, wait=False, embeds=None):
+def _with_query(url, extra):
+    return url + ("&" if "?" in url else "?") + extra
+
+
+def post(url, content=None, embed=None, wait=False, embeds=None, silent=False):
     """Returns (ok, message_id, error)."""
     if content:
         payload = {"content": content}
     else:
         payload = {"embeds": embeds if embeds is not None else [embed]}
+    payload["allowed_mentions"] = {"parse": []}            # never ping @everyone or roles by accident
+    if silent:
+        payload["flags"] = SILENT
     if wait:
-        url += ("&" if "?" in url else "?") + "wait=true"
+        url = _with_query(url, "wait=true")
     status, body, err = _request("POST", url, payload)
     return status in (200, 204), (body or {}).get("id"), err
 
 
 def edit(url, message_id, embed):
-    return _request("PATCH", f"{url.split('?')[0]}/messages/{message_id}", {"embeds": [embed]})[0]
+    """Edit one of our messages. Keeps ?thread_id= so messages inside threads and forum posts are found.
+    Returns (status, error)."""
+    base, _, query = url.partition("?")
+    target = f"{base}/messages/{message_id}"
+    thread = [q for q in query.split("&") if q.startswith("thread_id=")]
+    if thread:
+        target = _with_query(target, thread[0])
+    status, _, err = _request("PATCH", target, {"embeds": [embed]})
+    return status, err
 
 
-def push_digest(st, cfg, force=False):
-    url = (cfg["digest_webhook"].strip() or cfg["webhook"].strip())
-    embed = build_digest(st, cfg)
+def _push_board(st, key, url, embed, force=False):
+    """Keep one self-updating message (the digest or the race board). Returns (ok, what happened)."""
     stable = {k: v for k, v in embed.items() if k != "timestamp"}
     h = hashlib.md5(json.dumps(stable, sort_keys=True).encode()).hexdigest()
-    d = st["digest"]
-    same_target = d.get("id") and d.get("url") == url
+    d = st.setdefault(key, {})
+    same_target = d.get("id") and d.get("hook") == hook_key(url)
     if same_target and d.get("hash") == h and not force:
         return True, "unchanged"
     if same_target:
-        status = edit(url, d["id"], embed)
+        status, err = edit(url, d["id"], embed)
         if status in (200, 204):
             d["hash"] = h
             return True, "updated"
         if status != 404:                      # 404 = message was deleted, so post a fresh one
-            return False, f"edit failed (HTTP {status})"
-    ok, mid, err = post(url, embed=embed, wait=True)
+            return False, f"edit failed ({err or 'HTTP %s' % status})"
+    ok, mid, err = post(url, embed=embed, wait=True, silent=True)
     if ok and mid:
-        st["digest"] = {"id": mid, "url": url, "hash": h}
+        st[key] = {"id": mid, "hook": hook_key(url), "hash": h}
         return True, "posted"
     return False, err or "no message id came back"
 
 
+def board_url(cfg):
+    return cfg["digest_webhook"].strip() or cfg["webhook"].strip()
+
+
+def push_digest(st, cfg, force=False):
+    return _push_board(st, "digest", board_url(cfg), build_digest(st, cfg), force)
+
+
+def push_ladder(st, cfg, force=False):
+    embed = build_ladder(st, cfg)
+    if embed is None:
+        return True, "unchanged"
+    return _push_board(st, "ladder", board_url(cfg), embed, force)
+
+
 def chunk(msgs, per_post=8, limit=5000):
-    """Group announcements into Discord posts (each up to 8 colour-coded cards, within Discord's size limit)."""
+    """Group announcements into Discord posts (each up to 8 colour-coded cards, within Discord's size limit).
+    Quiet cards and pinging cards never share a post."""
     out, cur, used = [], [], 0
     for m in msgs:
         n = len(m["text"])
-        if cur and (len(cur) >= per_post or used + n > limit):
+        if cur and (len(cur) >= per_post or used + n > limit or bool(m.get("silent")) != bool(cur[0].get("silent"))):
             out.append(cur)
             cur, used = [], 0
         cur.append(m)
@@ -545,7 +687,159 @@ def to_embeds(items):
 
 
 def post_items(url, items):
-    return post(url, embeds=to_embeds(items))
+    return post(url, embeds=to_embeds(items), silent=all(it.get("silent") for it in items))
+
+
+# ------------------------------ webhooks and examples ------------------------------
+WEBHOOK_RE = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[\w-]+(?:\?thread_id=\d+)?$")
+
+
+def webhook_problem(url, required=True):
+    """Plain-English problem with a webhook URL, or '' when it looks right."""
+    url = str(url or "").strip()
+    if not url:
+        return "Paste a webhook URL here." if required else ""
+    if "discord" not in url:
+        return "That isn't a Discord link. In Discord: Edit Channel → Integrations → Webhooks → Copy Webhook URL."
+    if not WEBHOOK_RE.match(url):
+        return "That looks like a Discord link, but not a webhook. It should start with https://discord.com/api/webhooks/"
+    return ""
+
+
+def sample_posts(cfg):
+    """One example of every kind of post, so officers can see them all in Discord before the guild does."""
+    c = lambda n: class_color(n)
+    tag = "\n\n🧪 *Example post*"
+    return [
+        {"text": fmt(cfg.get("welcome_msg", DEFAULTS["welcome_msg"]), name="Thrall", level=7, cls="Shaman") + tag, "color": c("SHAMAN")},
+        {"text": fmt(cfg.get("level_msg", DEFAULTS["level_msg"]), name="Jaina", level=20, cls="Mage")
+                 + "\n🥇 First in the guild to hit 20!\n💡 Tip: shout in guild chat for a dungeon group." + tag, "color": c("MAGE")},
+        {"text": "🏆 **Arthas** hit the level cap: **Level 60**! Absolute legend." + tag, "color": c("PALADIN")},
+        {"text": "🔨 **Sylvanas** reached **Artisan (225)** in Tailoring!" + tag, "color": c("HUNTER"), "silent": True},
+        {"text": "**Varian** looted **Thunderfury, Blessed Blade of the Windseeker**\nLegendary · item level 80" + tag,
+         "color": QUALITY_COLORS[5], "title": "Thunderfury, Blessed Blade of the Windseeker",
+         "url": "https://www.wowhead.com/classic/item=19019",
+         "thumb": "https://wow.zamimg.com/images/wow/icons/large/inv_sword_39.jpg"},
+        {"text": "⚔️ **Onyxia** is down! Defeated by **Varian**, **Jaina** and **Thrall** (group of 10)." + tag, "color": c("WARRIOR")},
+        {"text": "👋 Welcome back, **Uther**! It's been 21 days. Good to see you again." + tag, "color": c("PALADIN"), "silent": True},
+        {"text": "💀 **Jaina** has died in Westfall." + tag, "color": c("MAGE"), "silent": True},
+        {"text": "📜 **Thrall** completed **The Defias Brotherhood**." + tag, "color": c("SHAMAN"), "silent": True},
+    ]
+
+
+def sample_state(cfg):
+    """A made-up guild, for example boards."""
+    st = {"members": {}, "firsts": {}, "crafters": {}, "week": new_week(week_id(datetime.now(), cfg.get("week_start", 0)))}
+    for n, lvl, cls in (("Arthas", 60, "PALADIN"), ("Jaina", 47, "MAGE"), ("Thrall", 44, "SHAMAN"), ("Sylvanas", 38, "HUNTER"),
+                        ("Varian", 31, "WARRIOR"), ("Uther", 22, "PALADIN"), ("Valeera", 12, "ROGUE")):
+        st["members"][n] = {"level": lvl, "class": cls, "off": 0}
+    st["firsts"] = {"level:10": "Jaina", "level:20": "Jaina", "level:30": "Arthas", "level:40": "Arthas",
+                    "level:50": "Arthas", "level:60": "Arthas"}
+    w = st["week"]
+    w["new"] = [{"name": "Valeera", "cls": "Rogue", "level": 12}]
+    w["gains"] = {"Jaina": [9, 47], "Thrall": [6, 44], "Varian": [4, 31]}
+    w["milestones"] = [{"name": "Jaina", "level": 40}, {"name": "Varian", "level": 30}]
+    w["tiers"] = [{"name": "Sylvanas", "prof": "Tailoring", "tier": "Artisan (225)"}]
+    w["loot"], w["boss"] = {"Varian": 3, "Jaina": 2}, {"Arthas": 4, "Varian": 4, "Jaina": 3}
+    w["quests"], w["deaths"] = {"Thrall": 31, "Jaina": 18}, {"Jaina": 3, "Valeera": 1}
+    w["back"] = [{"name": "Uther", "days": 21}]
+    st["crafters"] = {"Tailoring": [["Sylvanas", 225], ["Jaina", 150]], "Blacksmithing": [["Varian", 210]]}
+    return st
+
+
+def send_samples(cfg, log):
+    """Post one example of everything: feed cards to the main webhook, the two boards to the boards webhook.
+    Returns True if all went through."""
+    ok_all = True
+    for part in chunk(sample_posts(cfg)):
+        ok, _, err = post_items(cfg["webhook"], part)
+        if not ok:
+            log(f"Example posts failed: {err}")
+            return False
+        _sleep(1.2)
+    log("Example feed posts sent.")
+    st = sample_state(cfg)
+    for label, embed in (("digest", build_digest(st, cfg)), ("race board", build_ladder(st, cfg))):
+        embed["title"] = "🧪 " + embed["title"]
+        embed["description"] = "Example with made-up names. The real one appears once the app has watched your guild."
+        ok, _, err = post(board_url(cfg), embed=embed, silent=True)
+        if not ok:
+            log(f"Example {label} failed: {err}")
+            ok_all = False
+        else:
+            log(f"Example {label} sent.")
+        _sleep(1.2)
+    return ok_all
+
+
+def dashboard(cfg):
+    """Numbers for the app's Home page, from the saved memory. Never fails."""
+    try:
+        st = load_state()
+    except Exception:
+        st = {}
+    w = st.get("week") or {}
+    members = st.get("members") or {}
+    try:
+        cap = int(cfg.get("max_level") or 60)
+    except (TypeError, ValueError):
+        cap = 60
+    return {
+        "members": len(members),
+        "at_cap": sum(1 for m in members.values() if m.get("level", 0) >= cap),
+        "levels_week": sum(g[0] for g in (w.get("gains") or {}).values()),
+        "milestones_week": len(w.get("milestones") or []),
+        "waiting": len(st.get("outbox") or []),
+        "digest": bool((st.get("digest") or {}).get("id")),
+        "ladder": bool((st.get("ladder") or {}).get("id")),
+        "last_check": st.get("last_check"),
+        "guild": st.get("guild") or "",
+    }
+
+
+# ------------------------------ the race to the level cap ------------------------------
+def build_ladder(st, cfg, rows=15):
+    """A board that edits itself: who's highest, who got each milestone first, and the guild's total.
+    None when there's nobody to show."""
+    members = [(short(n), r.get("level", 0), r.get("class", "")) for n, r in st.get("members", {}).items()
+               if r.get("off", 0) <= 30]                   # long-gone members don't clutter the race
+    if not members:
+        return None
+    try:
+        cap = int(cfg.get("max_level") or 60)
+    except (TypeError, ValueError):
+        cap = 60
+    members.sort(key=lambda m: (-m[1], m[0].lower()))
+    lines = []
+    for i, (who, lvl, cls) in enumerate(members[:rows], 1):
+        crown = " 👑" if lvl >= cap else ""
+        lines.append(f"`{i:>2}.` **{who}** · {lvl} {class_name(cls)}{crown}")
+    if len(members) > rows:
+        lines.append(f"…and {len(members) - rows} more on the road")
+
+    firsts = []
+    for m in sorted(nums(cfg.get("milestones", "")) | {cap}):
+        who = st.get("firsts", {}).get(f"level:{m}")
+        if who:
+            firsts.append(f"{'🏆' if m == cap else '🥇'} {m}: **{who}**")
+    total = sum(m[1] for m in members)
+    at_cap = sum(1 for m in members if m[1] >= cap)
+    goal = cap * len(members)
+    filled = round(10 * total / goal) if goal else 0
+    bar = "🟩" * filled + "⬛" * (10 - filled)
+
+    fields = [{"name": "🧗 The ladder", "value": "\n".join(lines)[:1024]}]
+    if firsts:
+        fields.append({"name": "First in the guild", "value": " · ".join(firsts)[:1024]})
+    fields.append({"name": "Guild goal: everyone to " + str(cap),
+                   "value": f"{bar}\n{total:,} of {goal:,} levels · {at_cap}/{len(members)} at {cap}"})
+    return {
+        "title": f"🏁 Race to {cap}",
+        "description": "This board updates itself. Climb it!",
+        "color": 0xF0B232,
+        "fields": fields,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ------------------------------ the /gms week file ------------------------------
@@ -668,6 +962,7 @@ class Engine:
                                   cfg.get("device_id") or "pc", cfg.get("my_name") or "Officer") if self.shared else None)
         self.role, self.role_text, self.last_sync, self.uploaded_ts = "", "", 0.0, 0
         self.cache, self.outbox, self.fail_streak, self.pending_digest, self.warned = (0, None), [], 0, None, set()
+        self.pending_ladder = None
 
     def check(self, force_digest=False):
         """One pass: read file, announce, update digest, save. Returns False if it should retry."""
@@ -694,24 +989,48 @@ class Engine:
             st, msgs, notes = process(snap, load_state(), self.cfg, datetime.now())
             for n in notes:
                 self.log(n)
-            parts = chunk(msgs)
-            for i, part in enumerate(parts):
-                ok, _, err = post_items(self.cfg["webhook"], part)
-                if not ok:
-                    self.log(f"Couldn't post to Discord ({err}). I'll try again shortly.")
-                    return False
-                if i + 1 < len(parts):
-                    time.sleep(1.2)
-            if msgs:
-                self.log(f"Posted {len(msgs)} announcement(s).")
+            # Remember what's waiting to be posted BEFORE posting, so a failure never posts anything twice.
+            st["outbox"] = (st.get("outbox") or []) + msgs
+            if len(st["outbox"]) > MAX_OUTBOX:
+                self.log(f"Too many announcements were waiting, so I dropped the oldest {len(st['outbox']) - MAX_OUTBOX}.")
+                st["outbox"] = st["outbox"][-MAX_OUTBOX:]
+            save_state(st)
+            posted_ok = self._flush_saved(st)
             write_week_file(self.cfg, st)
-            if self.cfg["digest_enabled"] or force_digest:
-                ok, what = push_digest(st, self.cfg, force=force_digest)
-                if what != "unchanged":
-                    self.log(f"Weekly digest {what}." if ok else f"Digest problem: {what}")
+            self._boards(st, force_digest)
+            st["last_check"] = time.time()
             save_state(st)
             self.log(f"Checked {len(snap['members'])} members.")
-            return True
+            return posted_ok
+
+    def _flush_saved(self, st):
+        """Post the saved outbox one Discord message at a time, saving after each. False if something's left."""
+        sent = 0
+        while st["outbox"]:
+            part = chunk(st["outbox"])[0]
+            ok, _, err = post_items(self.cfg["webhook"], part)
+            if not ok:
+                self.log(f"Couldn't post to Discord ({err}). {len(st['outbox'])} announcement(s) are saved; I'll try again shortly.")
+                return False
+            del st["outbox"][:len(part)]
+            sent += len(part)
+            save_state(st)
+            if st["outbox"]:
+                _sleep(1.2)
+        if sent:
+            self.log(f"Posted {sent} announcement(s).")
+        return True
+
+    def _boards(self, st, force_digest=False):
+        """Update the self-editing messages. Runs even when an announcement failed, so the digest button works."""
+        if self.cfg["digest_enabled"] or force_digest:
+            ok, what = push_digest(st, self.cfg, force=force_digest)
+            if what != "unchanged":
+                self.log(f"Weekly digest {what}." if ok else f"Digest problem: {what}")
+        if self.cfg.get("ladder_enabled", True):
+            ok, what = push_ladder(st, self.cfg)
+            if what != "unchanged":
+                self.log(f"Race board {what}." if ok else f"Race board problem: {what}")
 
     def run(self, stop):
         if self.shared:
@@ -812,19 +1131,29 @@ class Engine:
                 self.log("Moved this PC's memory into the shared service.")
         if self.pending_digest:
             state["digest"] = self.pending_digest
+        if self.pending_ladder:
+            state["ladder"] = self.pending_ladder
         new, msgs, notes = process(snap, state, self.cfg, datetime.now())
         new["snap_ts"] = snap["updated"]
+        new["last_check"] = time.time()
+        msgs = (new.pop("outbox", None) or []) + msgs       # anything this PC still had waiting from solo mode
         if self.cfg["digest_enabled"] or force_digest:
             ok, what = push_digest(new, self.cfg, force=force_digest)
             if what != "unchanged":
                 self.log(f"Weekly digest {what}." if ok else f"Digest problem: {what}")
             if ok and what == "posted":
                 self.pending_digest = new["digest"]         # remembered in case the save below fails
+        if self.cfg.get("ladder_enabled", True):
+            ok, what = push_ladder(new, self.cfg)
+            if what != "unchanged":
+                self.log(f"Race board {what}." if ok else f"Race board problem: {what}")
+            if ok and what == "posted":
+                self.pending_ladder = new["ladder"]
         ok, res, err = self.store.commit(new, version)      # save memory BEFORE posting, so nothing posts twice
         if not ok:
             self.log(f"Couldn't save to the shared service ({err}). I'll try again.")
             return False
-        self.pending_digest = None
+        self.pending_digest = self.pending_ladder = None
         new["version"] = res["version"]
         for n in notes:
             self.log(n)
@@ -844,6 +1173,8 @@ class Engine:
             if ok:
                 self.outbox.pop(0)
                 self.fail_streak = 0
+                if self.outbox:
+                    _sleep(1.2)
                 continue
             self.fail_streak += 1
             self.log(f"Couldn't post to Discord ({err}).")
@@ -889,12 +1220,35 @@ def resolve_savedvars(cfg):
     return str(cfg.get("savedvars", "")).strip()
 
 
+def _registry_wow_dirs():
+    """Where the Battle.net launcher says World of Warcraft is installed (Windows only)."""
+    found = []
+    try:
+        import winreg
+    except ImportError:
+        return found
+    for key in (r"SOFTWARE\WOW6432Node\Blizzard Entertainment\World of Warcraft",
+                r"SOFTWARE\Blizzard Entertainment\World of Warcraft"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+                path = winreg.QueryValueEx(k, "InstallPath")[0]
+        except OSError:
+            continue
+        p = Path(path)
+        found.append(str(p.parent if p.name.startswith("_") else p))   # InstallPath may point at a _flavor_ folder
+    return found
+
+
 def find_game_folders():
-    roots = [os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), "C:\\", "D:\\", "E:\\"]
+    """Every game-version folder (_retail_, _classic_beta_, ...) that has an Interface folder. WoW: Forever's
+    folder name isn't known for sure until launch, so the app lists them all and the officer picks."""
+    bases = _registry_wow_dirs()
+    for r in filter(None, [os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), "C:\\", "D:\\", "E:\\"]):
+        bases += [os.path.join(r, "World of Warcraft"), os.path.join(r, "Games", "World of Warcraft")]
     hits = []
-    for r in filter(None, roots):
-        for pat in ("World of Warcraft/_*_", "Games/World of Warcraft/_*_"):
-            hits += [h for h in glob.glob(os.path.join(r, pat)) if os.path.isdir(os.path.join(h, "Interface"))]
+    for b in bases:
+        hits += [os.path.normpath(h) for h in glob.glob(os.path.join(b, "_*_"))
+                 if os.path.isdir(os.path.join(h, "Interface"))]
     return list(dict.fromkeys(hits))
 
 
@@ -912,10 +1266,27 @@ def _toc_version(folder):
     return None
 
 
+def _addon_fingerprint(folder):
+    """A hash of the addon's own files (Digest.lua is left out: the app rewrites it)."""
+    h = hashlib.md5()
+    try:
+        for f in sorted(Path(folder).glob("*")):
+            if f.is_file() and f.name != "Digest.lua":
+                h.update(f.name.encode())
+                h.update(f.read_bytes().replace(b"\r\n", b"\n"))
+    except Exception:
+        return None
+    return h.hexdigest()
+
+
 def addon_status(game):
-    """(version installed in the game or None, version bundled with this app or None)"""
-    return (_toc_version(Path(game) / "Interface" / "AddOns" / "GuildMilestones"),
-            _toc_version(bundled_addon_dir()))
+    """(version installed in the game or None, version bundled with this app or None).
+    If the files differ but the version number is the same, the installed one is reported as '<version>*'."""
+    installed_dir = Path(game) / "Interface" / "AddOns" / "GuildMilestones"
+    have, new = _toc_version(installed_dir), _toc_version(bundled_addon_dir())
+    if have and have == new and _addon_fingerprint(installed_dir) != _addon_fingerprint(bundled_addon_dir()):
+        have += "*"
+    return have, new
 
 
 def install_addon(game):
@@ -1020,9 +1391,12 @@ def check_report():
     newer = _ver(latest) > _ver(APP_VERSION)
     if newer:
         text = f"GitHub has v{latest}; this app is v{APP_VERSION}. An update is available."
+    elif _ver(latest) < _ver(APP_VERSION):
+        text = (f"This copy (v{APP_VERSION}) is newer than the one on GitHub (v{latest}). That's normal until "
+                "you upload it. Your friends' apps will offer the update once engine.py on GitHub says "
+                f"v{APP_VERSION}.")
     else:
-        text = (f"GitHub's engine.py says v{latest}, and this app is v{APP_VERSION}, so you're up to date. "
-                "If you uploaded a newer version, check that engine.py itself was replaced on GitHub.")
+        text = f"You're up to date (v{APP_VERSION})."
     return {"ok": True, "newer": newer, "latest": latest, "text": text}
 
 

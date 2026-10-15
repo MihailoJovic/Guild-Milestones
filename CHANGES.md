@@ -1,5 +1,31 @@
 # What's new
 
+## v0.9.0
+**A brand-new look, an in-game window, a Race to 60 board and weekly awards.**
+- The app has a new design: a sidebar, a Home page with a setup checklist and this week's numbers, and switches instead of tick boxes.
+- New Discord page that explains where posts go, with step-by-step webhook setup, a feed channel and a boards channel.
+- "Send examples of every post" shows you each kind of Discord post (with made-up names) before your guild sees them.
+- Webhook links are hidden behind dots, and the app tells you if a pasted link isn't a webhook.
+- In game, /gms now opens the Guild Milestones window: your progress, the guild's Race to 60, crafters, the week and your settings.
+- Pop-ups in game when a guildmate hits a milestone, loots an epic or the group downs a boss (can be switched off).
+- The update check no longer says "up to date" when your copy is newer than GitHub.
+- New 🏁 Race to 60 board in Discord: everyone's level, who hit each milestone first, and a progress bar for the whole guild. It edits itself, like the digest.
+- The weekly digest now hands out awards: 💎 Loot Goblin, ⚔️ Boss Hunter, 📜 Quest Machine and 💀 Darwin Award (only for people who share their deaths).
+- "Welcome back" posts when a friend returns after two weeks or more.
+- A boss kill is now one Discord post naming everyone who was there, not one post per person. Only the group leader shouts it in guild chat.
+- Smaller posts (loot below epic, deaths, quests, skill tiers) arrive quietly, without pinging phones.
+- Fixed the digest button: a failed announcement no longer stops the digest, and nothing is posted twice after a hiccup.
+- The app waits when Discord says "too many requests", and tells you plainly if your webhook was deleted.
+- Your webhook address is no longer saved in the app's memory file (or sent to the shared service).
+- Settings are saved safely, so a crash can't wipe them.
+- "Find it for me" now lists every game folder it finds, so you can pick the WoW: Forever one.
+- "Skip what the addon shouted" now starts off. Turn it on only if you can see guild chat in your Discord.
+- Addon: works with the modern item links on WoW: Forever, reads professions the Forever way, waits out chat restrictions in dungeons, and handles names like "First Surname".
+- Addon: tells you in your own chat window when a guildmate has a newer version.
+- Addon: `/gms save` now asks you to type `/reload` (WoW: Forever doesn't let addons reload for you).
+- An officer's alt in another guild no longer mixes that guild into your Discord.
+- After an update, the old app window closes properly.
+
 ## v0.8.1
 **The digest button now tells you exactly what happened.**
 - "Post / refresh the digest now" shows a pop-up with the result, including Discord's own error message if it refuses.
