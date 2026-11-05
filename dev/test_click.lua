@@ -22,7 +22,22 @@ check("blocked: both lines wait for a click", n == 2, n)
 check("blocked: oldest line first", first == "Thrall just hit level 30! Congrats!", first)
 check("blocked: told the player how to post", W.printed("/gms post"))
 local btn = postButton()
-check("blocked: Post bar shows the count", btn and btn.label:GetText() == "Post (2)", btn and btn.label:GetText())
+check("blocked: Post button found", btn ~= nil)
+local function barTitle()
+    for _, fr in ipairs(W.frames) do
+        if fr.kind == "FontString" and tostring(fr.text or ""):find("ready for guild chat") then return fr.text end
+    end
+end
+check("blocked: bar shows the count", barTitle() == "2 ready for guild chat", barTitle())
+
+-- the bar steps aside in combat and comes back after
+local barFrame
+for _, fr in ipairs(W.frames) do if fr.events and fr.events.PLAYER_REGEN_DISABLED then barFrame = fr end end
+check("combat: bar listens for combat", barFrame ~= nil)
+W.fire("PLAYER_REGEN_DISABLED")
+check("combat: hidden in combat", barFrame and barFrame.shown == false)
+W.fire("PLAYER_REGEN_ENABLED")
+check("combat: back after combat", barFrame and barFrame.shown == true)
 
 -- 2. A click posts exactly one line
 W.click(btn.scripts.OnClick, btn); W.run()
@@ -33,6 +48,7 @@ check("click: one still waiting", (ns.Ready()) == 1)
 W.click(SlashCmdList["GUILDMILESTONES"], "post"); W.run()
 check("/gms post: second line posted", #W.chat == 2 and W.chat[2].text:find("level 40"), #W.chat)
 check("/gms post: nothing left", (ns.Ready()) == 0)
+check("/gms post: bar hidden when empty", barFrame and barFrame.shown == false)
 W.clear(); W.click(SlashCmdList["GUILDMILESTONES"], "post")
 check("/gms post: says when empty", W.printed("Nothing waiting"))
 
