@@ -910,6 +910,47 @@ function ns.OnMoment(kind, who, a, b, c)
     end
 end
 
+-- ------------------------------------------------------------------ the Post bar
+-- On games that only let addons chat after a click, announcements wait here. Each click on Post
+-- sends the next line (the click is what the game asks for).
+local postBar
+
+local function BuildPostBar()
+    postBar = Box(UIParent, C.bg)
+    postBar:SetSize(340, 60)
+    postBar:SetPoint("TOP", 0, -215)
+    postBar:SetFrameStrata("DIALOG")
+    postBar:Hide()
+    local edge = Solid(postBar, C.gold)
+    edge:SetPoint("TOPLEFT", 1, -1)
+    edge:SetPoint("BOTTOMLEFT", 1, 1)
+    edge:SetWidth(3)
+    postBar.title = Text(postBar, "GameFontNormal", C.gold)
+    postBar.title:SetPoint("TOPLEFT", 14, -10)
+    postBar.title:SetPoint("RIGHT", postBar, "RIGHT", -150, 0)
+    postBar.body = Text(postBar, "GameFontHighlightSmall", C.text)
+    postBar.body:SetPoint("TOPLEFT", postBar.title, "BOTTOMLEFT", 0, -5)
+    postBar.body:SetPoint("RIGHT", postBar, "RIGHT", -150, 0)
+    postBar.body:SetWordWrap(false)
+    postBar.post = Button(postBar, "Post", 70, 24, true, function() ns.PostNext() end)
+    postBar.post:SetPoint("RIGHT", -64, 0)
+    postBar.skip = Button(postBar, "Skip all", 50, 24, false, function() ns.SkipReady() end)
+    postBar.skip:SetPoint("RIGHT", -10, 0)
+    Tip(postBar.post, "Post to guild chat", "Your game only lets addons post after a click.\nEach click sends the next line. /gms post works too.")
+end
+
+function ns.ShowReady(count, nextText)
+    if (count or 0) == 0 then
+        if postBar then postBar:Hide() end
+        return
+    end
+    if not postBar then BuildPostBar() end
+    postBar.title:SetText(count == 1 and "1 announcement ready" or (count .. " announcements ready"))
+    postBar.body:SetText(tostring(nextText or ""))
+    postBar.post.label:SetText(count > 1 and ("Post (" .. count .. ")") or "Post")
+    postBar:Show()
+end
+
 -- ------------------------------------------------------------------ minimap button
 local ICON_FILE = "Interface\\AddOns\\GuildMilestones\\Media\\icon"
 local mini

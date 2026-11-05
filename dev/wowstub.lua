@@ -60,7 +60,16 @@ W.me, W.level = "Thrall", 29
 function UnitName() return W.me end
 function UnitLevel() return W.level end
 function GetMaxPlayerLevel() return 60 end
-function SendChatMessage(text, channel) W.chat[#W.chat+1] = { text = text, channel = channel } end
+-- W.blockChat = true acts like WoW: Forever / retail 12.1.5: a line sent outside a click is dropped
+-- silently. W.clicking = true while a click or a typed command runs.
+W.blockChat, W.clicking = false, false
+function SendChatMessage(text, channel)
+    if W.blockChat and not W.clicking then W.dropped = (W.dropped or 0) + 1; return end
+    W.chat[#W.chat+1] = { text = text, channel = channel }
+    local me = W.me
+    C_Timer.After(0, function() W.fire("CHAT_MSG_" .. channel, text, me) end)   -- the server echoes it back
+end
+function W.click(fn, ...) W.clicking = true; local r = { pcall(fn, ...) }; W.clicking = false; assert(r[1], r[2]); return table.unpack(r, 2) end
 C_ChatInfo = {
     RegisterAddonMessagePrefix = function(p) W.prefix = p end,
     SendAddonMessage = function(p, text, ch) W.addon[#W.addon+1] = { prefix = p, text = text, channel = ch } end,
