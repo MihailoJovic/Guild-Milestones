@@ -371,8 +371,15 @@ class App:
 
     # ------------------------------------------------------------ pages
     def page_home(self, p):
+        self.folder_banner = tk.Frame(p, bg="#3a2c10", highlightthickness=1, highlightbackground=GOLD)
+        self.folder_text = tk.Label(self.folder_banner, text="", bg="#3a2c10", fg=TEXT, font=FONT_B, justify="left",
+                                    anchor="w", wraplength=560)
+        self.folder_text.pack(side="left", padx=16, pady=12, fill="x", expand=True)
+        Btn(self.folder_banner, "Switch", self.switch_folder, "primary").pack(side="right", padx=12)
+        self.newer_folder = None
         hero = card(p, pad=20)
         hero.outer.pack(fill="x")
+        self.hero_outer = hero.outer
         top = tk.Frame(hero, bg=CARD)
         top.pack(fill="x")
         left = tk.Frame(top, bg=CARD)
@@ -690,6 +697,18 @@ class App:
     def refresh_home(self):
         c = self.collect()
         d = E.dashboard(c)
+        try:
+            self.newer_folder = E.newer_game_folder(c)
+        except Exception:
+            self.newer_folder = None
+        if self.newer_folder:
+            self.folder_text.configure(text=f"You've been playing in {os.path.basename(self.newer_folder)}, but the app is "
+                                            f"watching {os.path.basename(c['game_folder']) or 'no folder'}. "
+                                            "Switch so your guild's news reaches Discord.")
+            if not self.folder_banner.winfo_ismapped():
+                self.folder_banner.pack(fill="x", pady=(0, 14), before=self.hero_outer)
+        elif self.folder_banner.winfo_ismapped():
+            self.folder_banner.pack_forget()
         for k, v in self.tiles.items():
             v.configure(text=str(d.get(k, "–")) if d["members"] else "–")
         folder_ok = os.path.isdir(c["game_folder"])
@@ -836,7 +855,7 @@ class App:
             self.use_folder(os.path.normpath(p))
 
     def find(self):
-        hits = E.find_game_folders()
+        hits = E.played_order(E.find_game_folders())
         if not hits:
             return messagebox.showinfo("Couldn't find it", "No luck finding it automatically.\n\nClick Browse and pick "
                                        "the WoW: Forever folder inside World of Warcraft (the one with Interface and WTF).")
@@ -854,7 +873,9 @@ class App:
             row.pack(fill="x", padx=18, pady=3)
             t1 = tk.Label(row, text=name, bg=CARD2, fg=GOLD, font=FONT_B, anchor="w")
             t1.pack(anchor="w", padx=12, pady=(6, 0))
-            t2 = tk.Label(row, text=h, bg=CARD2, fg=MUTED, font=FONT_S, anchor="w")
+            seen = E._addon_file_time(h)
+            when = f"   ·   addon last saved {time.strftime('%b %d, %H:%M', time.localtime(seen))}" if seen else ""
+            t2 = tk.Label(row, text=h + when, bg=CARD2, fg=MUTED, font=FONT_S, anchor="w")
             t2.pack(anchor="w", padx=12, pady=(0, 6))
             for w in (row, t1, t2):
                 w.bind("<Button-1>", lambda e, path=h: (self.use_folder(path), win.destroy()))
@@ -1113,8 +1134,27 @@ class App:
     def toggle(self):
         self.halt() if self.running else self.start()
 
+    def switch_folder(self):
+        if self.newer_folder:
+            self.use_folder(self.newer_folder)
+            self.maybe_update_addon()
+            self.refresh_home()
+            if self.running:                                      # restart watching on the new folder
+                self.halt()
+                self.root.after(300, lambda: self.start(quiet=True))
+
     def start(self, quiet=False):
         c = self.collect()
+        newer = None
+        try:
+            newer = E.newer_game_folder(c)
+        except Exception:
+            pass
+        if newer and not quiet and messagebox.askyesno(
+                "Watching the right game?", f"Your addon saved more recently in {os.path.basename(newer)} than in "
+                f"{os.path.basename(c['game_folder']) or 'the folder you picked'}.\n\nSwitch to {os.path.basename(newer)}?"):
+            self.use_folder(newer)
+            c = self.collect()
         E.save_config(c)
         prob = self.problem(c)
         if prob:

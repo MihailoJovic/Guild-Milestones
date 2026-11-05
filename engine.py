@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.11.1"
+APP_VERSION = "0.11.2"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -1668,6 +1668,32 @@ def find_game_folders():
         hits += [os.path.normpath(h) for h in glob.glob(os.path.join(b, "_*_"))
                  if os.path.isdir(os.path.join(h, "Interface"))]
     return list(dict.fromkeys(hits))
+
+
+def _addon_file_time(folder):
+    """When the addon last saved its file in this game folder (0 if never)."""
+    hits = glob.glob(os.path.join(str(folder), "WTF", "Account", "*", "SavedVariables", "GuildMilestones.lua"))
+    return max((os.path.getmtime(h) for h in hits), default=0)
+
+
+def played_order(folders):
+    """Game folders, most recently played (with the addon) first."""
+    return sorted(folders, key=lambda f: -_addon_file_time(f))
+
+
+def newer_game_folder(cfg, margin=3600):
+    """Another game folder whose addon file is clearly newer than the chosen one, or None.
+    Catches the easy mistake of playing WoW: Forever while the app still watches _retail_."""
+    current = str(cfg.get("game_folder", "")).strip()
+    mine = _addon_file_time(current) if current else 0
+    best = None
+    for f in find_game_folders():
+        if os.path.normcase(os.path.normpath(f)) == os.path.normcase(os.path.normpath(current or ".")):
+            continue
+        t = _addon_file_time(f)
+        if t > mine + margin and (best is None or t > best[1]):
+            best = (f, t)
+    return best[0] if best else None
 
 
 def bundled_addon_dir():

@@ -1,6 +1,6 @@
 """Tests for engine.py with a fake Discord. Never touches your real settings or the internet.
 Run:  python dev/test_engine.py"""
-import json, os, sys, tempfile, urllib.error, io
+import json, os, sys, tempfile, time, urllib.error, io
 from datetime import datetime
 from pathlib import Path
 
@@ -330,6 +330,23 @@ sv2.write_text('GuildMilestonesDB = {\n["members"] = {\n"A-R|10|MAGE|1|0",\n},\n
 ps = E.parse_file(sv2)
 check("parse keys (unknown codes dropped)", ps["keys"] == {"Ann": ["ony", "mc"]}, ps["keys"])
 check("parse lfg", ps["lfg"] and ps["lfg"][0]["wants"] == ["sm", "rfk"], ps["lfg"])
+
+# ---------------------------------------------------------------- the app notices when you play a different game version
+wow = Path(TMP) / "wow"
+for flavor, age in (("_retail_", 30 * 86400), ("_forever_", 60)):
+    d = wow / flavor / "WTF" / "Account" / "ME" / "SavedVariables"
+    d.mkdir(parents=True)
+    (wow / flavor / "Interface").mkdir(exist_ok=True)
+    f = d / "GuildMilestones.lua"
+    f.write_text("GuildMilestonesDB = {}\n", encoding="utf-8")
+    os.utime(f, (time.time() - age, time.time() - age))
+real_find = E.find_game_folders
+E.find_game_folders = lambda: [str(wow / "_retail_"), str(wow / "_forever_")]
+hint = E.newer_game_folder(cfg(game_folder=str(wow / "_retail_")))
+check("newer game folder spotted", hint and hint.endswith("_forever_"), hint)
+check("no hint when already on the newest", E.newer_game_folder(cfg(game_folder=str(wow / "_forever_"))) is None)
+check("most recently played listed first", E.played_order(E.find_game_folders())[0].endswith("_forever_"))
+E.find_game_folders = real_find
 
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

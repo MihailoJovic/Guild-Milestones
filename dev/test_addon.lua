@@ -9,7 +9,7 @@ W.fire("PLAYER_LOGIN"); W.run()
 check("login prints ready line", W.printed("ready"))
 check("prefix registered", W.prefix == "GMS1")
 check("panel registered", W.category ~= nil)
-check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.11.1", W.addon[1] and W.addon[1].text)
+check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.11.2", W.addon[1] and W.addon[1].text)
 W.clear()
 
 -- 2. levels
@@ -83,7 +83,7 @@ W.fire("GUILD_ROSTER_UPDATE")
 check("snapshot members", GuildMilestonesDB.members and #GuildMilestonesDB.members == 2)
 check("snapshot row", GuildMilestonesDB.members[1] == "Thrall-Realm|60|SHAMAN|0|0", GuildMilestonesDB.members[1])
 check("snapshot profs", GuildMilestonesDB.profs and #GuildMilestonesDB.profs == 3, GuildMilestonesDB.profs and #GuildMilestonesDB.profs)
-check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.11.1")
+check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.11.2")
 
 -- 10. crafters
 slash("crafters")
@@ -343,7 +343,7 @@ check("newer version noticed", W.printed("v0.12.0") and W.printed("Jaina"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.12.0", "GUILD", "Jaina-Realm")
 check("notice only once per session", not W.printed("v0.12.0"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
-check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.11.1", W.addon[1] and W.addon[1].text)
+check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.11.2", W.addon[1] and W.addon[1].text)
 local nHeard = #GuildMilestonesDB.heard
 W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
 check("version messages are not logged as events", #GuildMilestonesDB.heard == nHeard)
@@ -361,7 +361,7 @@ W.ns.pages.settings.selectors.minimap.step(1)
 check("minimap shown again", GuildMilestonesMinimapButton:IsShown())
 GuildMilestonesMinimapButton.scripts.OnEnter(GuildMilestonesMinimapButton)
 check("tooltip shows", W.tooltip == "Guild Milestones")
-check("welcomed once", GuildMilestonesDB.welcomed == "0.11.1")
+check("welcomed once", GuildMilestonesDB.welcomed == "0.11.2")
 
 -- v0.11: mounts, attunements, looking for group
 W.clear(); GuildMilestonesDB.events = nil

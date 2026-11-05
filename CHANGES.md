@@ -1,5 +1,11 @@
 # What's new
 
+## v0.11.2
+**The app now notices when you play WoW: Forever but it's still watching another game.**
+- If another game folder (like _forever_) has newer addon data than the one the app watches, Home shows a gold banner with a Switch button. Clicking Start asks too.
+- "Find it for me" lists the game you played most recently first, with when the addon last saved there.
+- Includes everything from v0.11.1 below (guild chat on Forever with one click).
+
 ## v0.11.1
 **Guild chat announcements work on WoW: Forever again, with one click.**
 - Forever (and Midnight since patch 12.1.5) silently drops guild chat that an addon sends by itself. The addon now notices this and puts your announcements on a small Post bar. One click posts one line. Typing /gms post works too.
