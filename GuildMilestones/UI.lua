@@ -912,43 +912,99 @@ end
 
 -- ------------------------------------------------------------------ the Post bar
 -- On games that only let addons chat after a click, announcements wait here. Each click on Post
--- sends the next line (the click is what the game asks for).
+-- sends the next line (the click is what the game asks for). It stays small and out of the way:
+-- it sits above the chat box, steps aside in combat, and can be dragged anywhere.
 local postBar
+local barCount, barText = 0, nil
+
+local function PlacePostBar()
+    postBar:ClearAllPoints()
+    local x, y = tostring(ns.S("postBarPos") or ""):match("^(%-?[%d.]+),(%-?[%d.]+)$")
+    if x then
+        postBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", tonumber(x), tonumber(y))
+    elseif ChatFrame1 then
+        postBar:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", -4, 34)   -- just above the chat tabs
+    else
+        postBar:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 40, 260)
+    end
+end
+
+local function RefreshPostBar()
+    if not postBar then return end
+    local inCombat = InCombatLockdown and InCombatLockdown()
+    if barCount == 0 or inCombat then postBar:Hide(); return end
+    postBar.title:SetText(barCount == 1 and "Ready for guild chat" or (barCount .. " ready for guild chat"))
+    postBar.body:SetText(tostring(barText or ""))
+    if not postBar:IsShown() then
+        postBar.fade = 0
+        postBar:SetAlpha(0)
+        postBar:Show()
+    end
+end
 
 local function BuildPostBar()
     postBar = Box(UIParent, C.bg)
-    postBar:SetSize(340, 60)
-    postBar:SetPoint("TOP", 0, -215)
-    postBar:SetFrameStrata("DIALOG")
+    postBar:SetSize(290, 40)
+    postBar:SetFrameStrata("MEDIUM")             -- under menus and dialogs, never on top of them
+    postBar:SetClampedToScreen(true)
+    postBar:SetMovable(true)
+    postBar:EnableMouse(true)
+    postBar:RegisterForDrag("LeftButton")
     postBar:Hide()
+    PlacePostBar()
     local edge = Solid(postBar, C.gold)
     edge:SetPoint("TOPLEFT", 1, -1)
     edge:SetPoint("BOTTOMLEFT", 1, 1)
-    edge:SetWidth(3)
-    postBar.title = Text(postBar, "GameFontNormal", C.gold)
-    postBar.title:SetPoint("TOPLEFT", 14, -10)
-    postBar.title:SetPoint("RIGHT", postBar, "RIGHT", -150, 0)
-    postBar.body = Text(postBar, "GameFontHighlightSmall", C.text)
-    postBar.body:SetPoint("TOPLEFT", postBar.title, "BOTTOMLEFT", 0, -5)
-    postBar.body:SetPoint("RIGHT", postBar, "RIGHT", -150, 0)
+    edge:SetWidth(2)
+    local icon = postBar:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture("Interface\\AddOns\\GuildMilestones\\Media\\icon")
+    icon:SetSize(22, 22)
+    icon:SetPoint("LEFT", 10, 0)
+    postBar.title = Text(postBar, "GameFontNormalSmall", C.gold)
+    postBar.title:SetPoint("TOPLEFT", 40, -6)
+    postBar.title:SetPoint("RIGHT", postBar, "RIGHT", -86, 0)
+    postBar.title:SetWordWrap(false)
+    postBar.body = Text(postBar, "GameFontHighlightSmall", C.muted)
+    postBar.body:SetPoint("TOPLEFT", postBar.title, "BOTTOMLEFT", 0, -3)
+    postBar.body:SetPoint("RIGHT", postBar, "RIGHT", -86, 0)
     postBar.body:SetWordWrap(false)
-    postBar.post = Button(postBar, "Post", 70, 24, true, function() ns.PostNext() end)
-    postBar.post:SetPoint("RIGHT", -64, 0)
-    postBar.skip = Button(postBar, "Skip all", 50, 24, false, function() ns.SkipReady() end)
-    postBar.skip:SetPoint("RIGHT", -10, 0)
+    postBar.post = Button(postBar, "Post", 50, 22, true, function() ns.PostNext() end)
+    postBar.post:SetPoint("RIGHT", -32, 0)
+    postBar.skip = Button(postBar, "\195\151", 22, 22, false, function() ns.SkipReady() end)   -- the × sign
+    postBar.skip:SetPoint("RIGHT", -6, 0)
     Tip(postBar.post, "Post to guild chat", "Your game only lets addons post after a click.\nEach click sends the next line. /gms post works too.")
+    Tip(postBar.skip, "Skip", "Clear the waiting lines without posting them.\nThe companion app still gets them for Discord.")
+    Tip(postBar, "Guild Milestones", "Drag to move. Right-click to put it back above the chat.")
+    postBar:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    postBar:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local l, b = self:GetLeft(), self:GetBottom()
+        if l and b then ns.Set("postBarPos", string.format("%d,%d", l, b)) end
+        PlacePostBar()
+    end)
+    postBar:SetScript("OnMouseUp", function(_, button)
+        if button == "RightButton" then ns.Set("postBarPos", nil); PlacePostBar() end
+    end)
+    postBar:SetScript("OnUpdate", function(self, elapsed)   -- a quick fade in, no sound, no flashing
+        if not self.fade then return end
+        self.fade = self.fade + elapsed
+        local a = math.min(1, self.fade / 0.25)
+        self:SetAlpha(a)
+        if a >= 1 then self.fade = nil end
+    end)
+    postBar:RegisterEvent("PLAYER_REGEN_DISABLED")             -- steps aside in combat, back after
+    postBar:RegisterEvent("PLAYER_REGEN_ENABLED")
+    postBar:SetScript("OnEvent", function(_, event)
+        if event == "PLAYER_REGEN_DISABLED" then postBar:Hide() else RefreshPostBar() end
+    end)
 end
 
 function ns.ShowReady(count, nextText)
-    if (count or 0) == 0 then
-        if postBar then postBar:Hide() end
-        return
-    end
+    barCount, barText = count or 0, nextText
+    if ns.UpdateMinimapBadge then pcall(ns.UpdateMinimapBadge, barCount) end
+    if barCount == 0 and not postBar then return end
     if not postBar then BuildPostBar() end
-    postBar.title:SetText(count == 1 and "1 announcement ready" or (count .. " announcements ready"))
-    postBar.body:SetText(tostring(nextText or ""))
-    postBar.post.label:SetText(count > 1 and ("Post (" .. count .. ")") or "Post")
-    postBar:Show()
+    RefreshPostBar()
 end
 
 -- ------------------------------------------------------------------ minimap button
@@ -994,7 +1050,27 @@ local function BuildMinimapButton()
     end)
     mini:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
     Tip(mini, "Guild Milestones", "Click: open the window.\nRight-click: settings.\nDrag: move this button.")
+    local dot = mini:CreateTexture(nil, "OVERLAY")              -- small count when lines wait to be posted
+    dot:SetColorTexture(C.gold[1], C.gold[2], C.gold[3], 1)
+    dot:SetSize(14, 14)
+    dot:SetPoint("TOPRIGHT", -2, -2)
+    dot:Hide()
+    local num = mini:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    num:SetPoint("CENTER", dot, "CENTER", 0, 0)
+    num:SetTextColor(0.12, 0.09, 0.03)
+    num:Hide()
+    mini.dot, mini.num = dot, num
     PlaceMini()
+end
+
+function ns.UpdateMinimapBadge(count)
+    if not (mini and mini.dot) then return end
+    if (count or 0) > 0 then
+        mini.num:SetText(count > 9 and "9+" or tostring(count))
+        mini.dot:Show(); mini.num:Show()
+    else
+        mini.dot:Hide(); mini.num:Hide()
+    end
 end
 
 function ns.UpdateMinimap()
