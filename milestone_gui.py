@@ -944,6 +944,9 @@ class App:
         elif have.endswith("*"):
             self.addon_lbl.configure(text=f"An older build of v{new} is installed. Update it.", fg=GOLD)
             self.addon_btn.set_kind("primary")
+        elif E._ver(have) > E._ver(new):
+            self.addon_lbl.configure(text=f"v{have} is installed (newer than this app's v{new}). Leaving it be.", fg=GOOD)
+            self.addon_btn.set_kind("ghost")
         elif have != new:
             self.addon_lbl.configure(text=f"v{have} is installed. v{new} is available.", fg=GOLD)
             self.addon_btn.set_kind("primary")
@@ -971,7 +974,7 @@ class App:
         if not (self.b["auto_update_addon"].get() and os.path.isdir(g)):
             return
         have, new = E.addon_status(g)
-        if new and have != new:
+        if E.addon_should_update(have, new):
             ok, msg = E.install_addon(g)
             self.log(msg + (" In the game, type /reload to load it." if ok else ""))
             self.refresh_addon()

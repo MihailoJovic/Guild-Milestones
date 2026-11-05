@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.11.2"
+APP_VERSION = "0.11.3"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -429,6 +429,13 @@ def process(snap, state, cfg, now):
                         msgs.append(build_recap(st, who, cls, cap, today))
         rec["level"] = level
 
+    in_roster = {m["name"] for m in members}
+    for name, rec in st["members"].items():               # left the guild, or from a guild you used to be in
+        if name in in_roster:
+            rec.pop("gone", None)
+        else:
+            rec["gone"] = True
+
     # professions: only announce for (member, profession) pairs we've already seen
     for p in snap["profs"]:
         mine = st["profs"].setdefault(p["name"], {})
@@ -485,6 +492,7 @@ def process(snap, state, cfg, now):
 # ------------------------------- loot, bosses, deaths, quests -------------------------------
 QUALITY_COLORS = {0: 0x9D9D9D, 1: 0xFFFFFF, 2: 0x1EFF00, 3: 0x0070DD, 4: 0xA335EE, 5: 0xFF8000}
 QUALITY_NAMES = {0: "Poor", 1: "Common", 2: "Uncommon", 3: "Rare", 4: "Epic", 5: "Legendary"}
+MOUNT_MIN_LEVEL = 30      # below this a "mount" is a misread (Vanilla mounts start at 40)
 BOSS_WINDOW = 15 * 60     # reports of the same boss within this many seconds are one kill
 _ITEM_CACHE = {}
 
@@ -559,6 +567,9 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
             fallen.append({"name": who, "level": ev["b"], "zone": ev["a"] or "the wilds", "ts": ev["ts"]})
             del fallen[:-50]
         elif kind == "M":                                  # mounts: a = "mount" (normal) or "epic"
+            lvl = next((r.get("level", 0) for n, r in st.get("members", {}).items() if short(n) == who), 0)
+            if lvl and lvl < MOUNT_MIN_LEVEL:
+                continue                                   # nobody this low owns a mount: it was a flight path
             epic = ev["a"] == "epic"
             have = st.get("stats", {}).get(who, {}).get("mount", 0)
             if (2 if epic else 1) <= have:
@@ -988,8 +999,8 @@ def dashboard(cfg):
     except (TypeError, ValueError):
         cap = 60
     return {
-        "members": len(members),
-        "at_cap": sum(1 for m in members.values() if m.get("level", 0) >= cap),
+        "members": sum(1 for m in members.values() if not m.get("gone")),
+        "at_cap": sum(1 for m in members.values() if m.get("level", 0) >= cap and not m.get("gone")),
         "levels_week": sum(g[0] for g in (w.get("gains") or {}).values()),
         "milestones_week": len(w.get("milestones") or []),
         "waiting": len(st.get("outbox") or []),
@@ -1172,7 +1183,7 @@ def guild_goals(st, cfg, members=None):
     """The goals the officers set: [{title, have, need, text}]. Members = [(name, level, class)] (active only)."""
     if members is None:
         members = [(short(n), r.get("level", 0), r.get("class", "")) for n, r in st.get("members", {}).items()
-                   if r.get("off", 0) <= 30]
+                   if r.get("off", 0) <= 30 and not r.get("gone")]
     out = []
     try:
         lvl = int(cfg.get("goal_level") or 0)
@@ -1207,7 +1218,7 @@ def build_ladder(st, cfg, rows=15):
     """A board that edits itself: who's highest, who got each milestone first, and the guild's total.
     None when there's nobody to show."""
     members = [(short(n), r.get("level", 0), r.get("class", "")) for n, r in st.get("members", {}).items()
-               if r.get("off", 0) <= 30]                   # long-gone members don't clutter the race
+               if r.get("off", 0) <= 30 and not r.get("gone")]                   # long-gone members don't clutter the race
     if not members:
         return None
     try:
@@ -1523,6 +1534,7 @@ class Engine:
             return None
         if snap["members"] and snap["updated"] > self.uploaded_ts:
             return {"updated": snap["updated"], "members": snap["members"], "profs": snap["profs"],
+                    "guild": snap.get("guild", ""), "keys": snap.get("keys", {}), "lfg": snap.get("lfg", []),
                     "heard": snap.get("heard", [])[-150:], "events": snap.get("events", [])[-100:], "from": self.cfg.get("my_name", "")}
         return None
 
@@ -1721,6 +1733,18 @@ def _addon_fingerprint(folder):
     except Exception:
         return None
     return h.hexdigest()
+
+
+def addon_should_update(have, new):
+    """Install the bundled addon only if it's missing, older, or the same version with different files.
+    Never replaces a newer addon (say, one from CurseForge) with an older one."""
+    if not new:
+        return False
+    if not have:
+        return True
+    if have.endswith("*"):
+        return have[:-1] == new
+    return _ver(have) < _ver(new)
 
 
 def addon_status(game):

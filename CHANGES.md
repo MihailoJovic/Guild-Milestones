@@ -1,5 +1,12 @@
 # What's new
 
+## v0.11.3
+**Flight paths no longer count as an epic mount, and the boards only show your current guild.**
+- Taking a flight path (like the hippogryph to Darkshore) was mistaken for an epic mount. Fixed: flight paths are ignored, a mount has to be seen twice in a row, and nobody under level 30 gets a mount post. The wrong one is forgotten, so it never reaches Discord.
+- The Race to 60 and the other boards only show people who are in the guild right now. Characters from an old guild, or people who left, drop off (and come back quietly if they rejoin).
+- Shared mode now shares attunements, Looking-for-group notes and the guild name, so those boards update too.
+- The app never replaces a newer addon with an older one.
+
 ## v0.11.2
 **The app now notices when you play WoW: Forever but it's still watching another game.**
 - If another game folder (like _forever_) has newer addon data than the one the app watches, Home shows a gold banner with a Switch button. Clicking Start asks too.

@@ -9,7 +9,7 @@ W.fire("PLAYER_LOGIN"); W.run()
 check("login prints ready line", W.printed("ready"))
 check("prefix registered", W.prefix == "GMS1")
 check("panel registered", W.category ~= nil)
-check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.11.2", W.addon[1] and W.addon[1].text)
+check("version hello sent at login", W.addon[1] and W.addon[1].text == "V|0.11.3", W.addon[1] and W.addon[1].text)
 W.clear()
 
 -- 2. levels
@@ -83,7 +83,7 @@ W.fire("GUILD_ROSTER_UPDATE")
 check("snapshot members", GuildMilestonesDB.members and #GuildMilestonesDB.members == 2)
 check("snapshot row", GuildMilestonesDB.members[1] == "Thrall-Realm|60|SHAMAN|0|0", GuildMilestonesDB.members[1])
 check("snapshot profs", GuildMilestonesDB.profs and #GuildMilestonesDB.profs == 3, GuildMilestonesDB.profs and #GuildMilestonesDB.profs)
-check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.11.2")
+check("snapshot version", GuildMilestonesDB.version == 3 and GuildMilestonesDB.addon == "0.11.3")
 
 -- 10. crafters
 slash("crafters")
@@ -343,7 +343,7 @@ check("newer version noticed", W.printed("v0.12.0") and W.printed("Jaina"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.12.0", "GUILD", "Jaina-Realm")
 check("notice only once per session", not W.printed("v0.12.0"))
 W.clear(); W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
-check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.11.2", W.addon[1] and W.addon[1].text)
+check("older copy gets told our version", W.addon[1] and W.addon[1].text == "V|0.11.3", W.addon[1] and W.addon[1].text)
 local nHeard = #GuildMilestonesDB.heard
 W.fire("CHAT_MSG_ADDON", "GMS1", "V|0.8.1", "GUILD", "Bob-Realm")
 check("version messages are not logged as events", #GuildMilestonesDB.heard == nHeard)
@@ -361,21 +361,49 @@ W.ns.pages.settings.selectors.minimap.step(1)
 check("minimap shown again", GuildMilestonesMinimapButton:IsShown())
 GuildMilestonesMinimapButton.scripts.OnEnter(GuildMilestonesMinimapButton)
 check("tooltip shows", W.tooltip == "Guild Milestones")
-check("welcomed once", GuildMilestonesDB.welcomed == "0.11.2")
+check("welcomed once", GuildMilestonesDB.welcomed == "0.11.3")
 
 -- v0.11: mounts, attunements, looking for group
 W.clear(); GuildMilestonesDB.events = nil
 IsMounted = function() return true end
+-- a flight path (taxi) is fast and counts as "mounted", but it's not your mount
+local savedLevel = W.level
+W.level = 40
+UnitOnTaxi = function() return true end
+GetUnitSpeed = function() return 28 end
+W.ns.CheckMount(); W.ns.CheckMount(); W.run()
+check("flight path is not a mount", not GuildMilestonesDB.events and #W.chat == 0, GuildMilestonesDB.events and GuildMilestonesDB.events[1])
+UnitOnTaxi = function() return false end
+-- too low to own a mount: a speed buff or a misread, never announced
+W.level = 12
+GetUnitSpeed = function() return 14 end
+W.ns.CheckMount(); W.ns.CheckMount(); W.run()
+check("no mount below level 30", not GuildMilestonesDB.events and #W.chat == 0)
+W.level = 40
+-- one fast moment isn't enough: the speed has to hold for two checks in a row
 GetUnitSpeed = function() return 11.2 end                 -- 60% faster than running
+W.ns.CheckMount(); W.run()
+check("one reading isn't enough", not GuildMilestonesDB.events)
 W.ns.CheckMount(); W.run()
 check("first mount event", GuildMilestonesDB.events and GuildMilestonesDB.events[1]:match("^M|Thrall|%d+|mount|60|$"), GuildMilestonesDB.events and GuildMilestonesDB.events[1])
 check("first mount said in guild chat", W.chat[1] and W.chat[1].text:find("first mount"), W.chat[1] and W.chat[1].text)
 W.clear(); W.ns.CheckMount(); W.run()
 check("same mount only once", #W.chat == 0)
 GetUnitSpeed = function() return 14 end                   -- epic: twice running speed
-W.ns.CheckMount(); W.run()
+W.ns.CheckMount(); W.ns.CheckMount(); W.run()
 check("epic mount noticed", W.chat[1] and W.chat[1].text:find("epic mount"))
 IsMounted = function() return false end
+W.level = savedLevel
+-- v0.11.3 clean-up: wrong mounts from flight paths (recorded by v0.11.0-0.11.2) are forgotten once
+GuildMilestonesDB.mounts = { Thrall = 2 }
+GuildMilestonesDB.events = { "M|Thrall|1800000000|epic|300|", "I|Thrall|1800000001|19019|4:80|Thunderfury" }
+GuildMilestonesDB.mountFix = nil
+W.ns.ForgetFlightMounts()
+check("wrong mounts forgotten", next(GuildMilestonesDB.mounts) == nil and #GuildMilestonesDB.events == 1
+      and GuildMilestonesDB.events[1]:match("^I|"), GuildMilestonesDB.events[1])
+GuildMilestonesDB.mounts = { Thrall = 1 }
+W.ns.ForgetFlightMounts()
+check("clean-up only runs once", GuildMilestonesDB.mounts.Thrall == 1)
 
 local done = {}
 C_QuestLog = { IsQuestFlaggedCompleted = function(id) return done[id] or false end }

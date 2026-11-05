@@ -1,4 +1,4 @@
--- Guild Milestones 0.11.2
+-- Guild Milestones 0.11.3
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.11.2"
+local VERSION = "0.11.3"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -461,13 +461,21 @@ end
 -- Works on any client, no mount list needed. Each character is celebrated once per mount tier.
 local RUN_SPEED = 7
 
+local MOUNT_MIN_LEVEL = 30               -- below this, "mounted at speed" is a misread (Vanilla mounts start at 40)
+local seenTier = 0                       -- the speed has to hold for two checks in a row
+
 local function CheckMount()
-    if not (IsMounted and IsMounted()) then return end
+    local function reset() seenTier = 0 end
+    if not (IsMounted and IsMounted()) then return reset() end
+    if UnitOnTaxi and UnitOnTaxi("player") then return reset() end      -- a flight path is not your mount
+    if (UnitLevel("player") or 0) < MOUNT_MIN_LEVEL then return reset() end
     local ok, speed = pcall(GetUnitSpeed, "player")
-    if not ok or not tonumber(speed) or speed <= 0 then return end
+    if not ok or not tonumber(speed) or speed <= 0 then return reset() end
     local pct = (speed / RUN_SPEED - 1) * 100
+    if pct > 150 then return reset() end                                -- faster than any ground mount: not a mount
     local tier = (pct >= 90 and 2) or (pct >= 50 and 1) or 0
-    if tier == 0 then return end
+    if tier == 0 then return reset() end
+    if seenTier ~= tier then seenTier = tier; return end                -- wait for a second reading
     local me = UnitName("player")
     local db = GuildMilestonesDB
     db.mounts = db.mounts or {}
@@ -480,6 +488,19 @@ local function CheckMount()
         Chat(Fill(tier == 2 and S("epicMountMsg") or S("mountMsg"), { name = me }))
     end
 end
+
+-- v0.11.0-0.11.2 could mistake a flight path for an epic mount. Forget what they recorded, once,
+-- so the wrong post never reaches Discord and the real first mount is still celebrated.
+local function ForgetFlightMounts()
+    local db = GuildMilestonesDB
+    if db.mountFix then return end
+    db.mountFix = 1
+    db.mounts = {}
+    for i = #(db.events or {}), 1, -1 do
+        if db.events[i]:match("^M|") then table.remove(db.events, i) end
+    end
+end
+ns.ForgetFlightMounts = ForgetFlightMounts
 
 -- ----------------------------------------------------- attunements and keys
 -- The quest that finishes each attunement or key. Codes must match ATTUNEMENTS in engine.py.
@@ -965,6 +986,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         GuildMilestonesDB = GuildMilestonesDB or {}
         GuildMilestonesDB.settings = GuildMilestonesDB.settings or {}
+        pcall(ForgetFlightMounts)
         pcall(function()
             if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
                 C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)

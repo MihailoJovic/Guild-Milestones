@@ -1,6 +1,7 @@
 """Tests for engine.py with a fake Discord. Never touches your real settings or the internet.
 Run:  python dev/test_engine.py"""
 import json, os, sys, tempfile, time, urllib.error, io
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from datetime import datetime
 from pathlib import Path
 
@@ -347,6 +348,38 @@ check("newer game folder spotted", hint and hint.endswith("_forever_"), hint)
 check("no hint when already on the newest", E.newer_game_folder(cfg(game_folder=str(wow / "_forever_"))) is None)
 check("most recently played listed first", E.played_order(E.find_game_folders())[0].endswith("_forever_"))
 E.find_game_folders = real_find
+
+# ---------------------------------------------------------------- v0.11.3 fixes
+# people no longer in the roster (left, or an old guild) drop off the boards
+st11 = E.load_state()
+st11.update({"initialized": True, "events_seen": [],
+             "members": {"Oldtimer-R": {"level": 90, "class": "DRUID", "first_seen": "2026-10-01", "off": 0},
+                         "Ann-R": {"level": 10, "class": "MAGE", "first_seen": "2026-11-04", "off": 0}}})
+st11, _, _ = E.process(snap([("Ann-R", 12, "MAGE", 0)]), st11, cfg(), NOW)
+lad = E.build_ladder(st11, cfg())
+check("someone not in the roster leaves the race board", "Oldtimer" not in lad["fields"][0]["value"], lad["fields"][0]["value"])
+check("but isn't forgotten (in case they come back)", st11["members"]["Oldtimer-R"].get("gone") is True)
+st11, msgs, _ = E.process(snap([("Ann-R", 12, "MAGE", 0), ("Oldtimer-R", 90, "DRUID", 0)]), st11, cfg(), NOW)
+check("coming back clears it, without a welcome post", not st11["members"]["Oldtimer-R"].get("gone") and not msgs, msgs)
+
+# a mount event for someone too low to own a mount (e.g. a flight path misread) is ignored
+st12 = E.load_state()
+st12.update({"initialized": True, "events_seen": [],
+             "members": {"Low-R": {"level": 12, "class": "MAGE", "first_seen": "2026-11-04", "off": 0}}})
+s12 = snap([("Low-R", 12, "MAGE", 0)], events=[{"kind": "M", "name": "Low", "ts": 1800000000, "a": "epic", "b": "400", "c": ""}])
+_, msgs, _ = E.process(s12, st12, cfg(), NOW)
+check("no mount post below level 30", not any("mount" in m["text"] for m in msgs), msgs)
+
+# shared mode uploads everything the boards need
+eng_s = E.Engine(cfg(game_folder=str(game)), lambda t: None)
+up = eng_s._local_snapshot()
+check("shared upload has guild, keys and lfg", up and all(k in up for k in ("guild", "keys", "lfg")), up and list(up))
+
+# the app only ever installs a NEWER addon
+check("upgrade when bundled is newer", E.addon_should_update("0.11.0", "0.11.2"))
+check("never downgrade", not E.addon_should_update("0.12.0", "0.11.2"))
+check("same version, different files = refresh", E.addon_should_update("0.11.2*", "0.11.2"))
+check("not installed = install", E.addon_should_update(None, "0.11.2"))
 
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
