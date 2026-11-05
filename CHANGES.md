@@ -1,5 +1,11 @@
 # What's new
 
+## v0.11.1
+**Guild chat announcements work on WoW: Forever again, with one click.**
+- Forever (and Midnight since patch 12.1.5) silently drops guild chat that an addon sends by itself. The addon now notices this and puts your announcements on a small Post bar. One click posts one line. Typing /gms post works too.
+- Games that still allow it keep posting by themselves, like before.
+- The addon is marked as up to date for Midnight 12.1.5.
+
 ## v0.11.0
 **Hall of Fame, mounts, attunements, guild goals, a Friday MVP vote and a tidy boards channel.**
 - 🏆 Hall of Fame board: every guild first, like first to 60, first mount, first epic, first boss kills, first attunements and maxed professions. A guild first also gets its own gold post.

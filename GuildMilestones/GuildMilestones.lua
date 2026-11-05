@@ -1,4 +1,4 @@
--- Guild Milestones 0.11.0
+-- Guild Milestones 0.11.1
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.11.0"
+local VERSION = "0.11.1"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -203,14 +203,79 @@ local function FlushHeld()
     while held[1] do SendHidden(table.remove(held, 1)) end
 end
 
+-- WoW: Forever and retail 12.1.5+ silently drop guild chat an addon sends by itself: only a key press
+-- or a click lets it through. So the first line of a session is a test: if it doesn't come back in
+-- chat, every line after that waits on a "Post" bar the player clicks (or /gms post).
+local ECHO_WAIT = 5                   -- seconds to wait for our own line to show up in chat
+local chatMode = "test"               -- test = not known yet, auto = sends by itself, click = needs a click
+local pending = nil                   -- the test line: { text = ..., channel = ... }
+local ready = {}                      -- lines waiting for the player's click
+
+local function ChatChannel() return (S("channel") == "OFFICER") and "OFFICER" or "GUILD" end
+
+local function SendChat(text, channel)
+    if C_ChatInfo and C_ChatInfo.SendChatMessage then
+        return pcall(C_ChatInfo.SendChatMessage, text, channel)
+    end
+    return pcall(SendChatMessage, text, channel)
+end
+
+local function ShowReady()
+    if ns.ShowReady then pcall(ns.ShowReady, #ready, ready[1]) end
+end
+
+local function NeedsClick(reason)
+    if chatMode == "click" then return end
+    chatMode = "click"
+    if pending then table.insert(ready, 1, pending.text); pending = nil end
+    while outbox[1] do ready[#ready + 1] = table.remove(outbox, 1) end
+    while #ready > 15 do table.remove(ready, 1) end
+    Say("Your game only lets addons post to %s after a click. Click |cfff2b84bPost|r on the bar, or type "
+        .. "|cfff2b84b/gms post|r.%s", ChatChannel() == "OFFICER" and "officer chat" or "guild chat", reason or "")
+    ShowReady()
+end
+
+-- One click (or /gms post) = one line. Returns how many are still waiting.
+local function PostNext()
+    local text = table.remove(ready, 1)
+    if text and IsInGuild() then SendChat(text, ChatChannel()) end
+    ShowReady()
+    return #ready
+end
+
 local function Pump()
     FlushHeld()
     local text = outbox[1]
     if not text then pumping = held[1] ~= nil; if pumping then After(10, Pump) end; return end
+    if chatMode == "click" then
+        while outbox[1] do ready[#ready + 1] = table.remove(outbox, 1) end
+        while #ready > 15 do table.remove(ready, 1) end
+        ShowReady()
+        pumping = held[1] ~= nil; if pumping then After(10, Pump) end
+        return
+    end
+    if pending then After(2, Pump); return end            -- still waiting to hear the test line back
     if ChatLocked() then After(10, Pump); return end      -- wait it out, nothing is lost
-    local channel = (S("channel") == "OFFICER") and "OFFICER" or "GUILD"
+    local channel = ChatChannel()
     local ok = true
-    if IsInGuild() then ok = pcall(SendChatMessage, text, channel) end
+    if IsInGuild() then
+        if chatMode == "test" then
+            local mine = { text = text, channel = channel }
+            pending = mine                                 -- set first: the echo may arrive right away
+            ok = SendChat(text, channel)
+            if ok then
+                table.remove(outbox, 1)
+                After(ECHO_WAIT, function()
+                    if pending == mine then NeedsClick() end
+                    Pump()
+                end)
+                return
+            end
+            if pending == mine then pending = nil end
+        else
+            ok = SendChat(text, channel)
+        end
+    end
     if ok or tries >= 5 then
         table.remove(outbox, 1)
         tries = 0
@@ -778,6 +843,7 @@ local function Help()
     print("  /gms options        the window's Settings tab")
     print("  /gms shout on|off   announce my milestones in chat")
     print("  /gms test           preview the messages, sends nothing")
+    print("  /gms post           post the next waiting announcement (games that need a click)")
     print("  /gms guild          which milestones your guild chose")
     print("  /gms publish        (officers) put the app's milestone settings into Guild Info")
     print("  /gms crafters <p>   who in the guild crafts a profession")
@@ -808,6 +874,12 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
         end
     elseif cmd == "test" then
         Preview()
+    elseif cmd == "post" then                             -- typing this is a key press, so the game allows it
+        if #ready == 0 then Say("Nothing waiting to post.")
+        else
+            local left = PostNext()
+            if left > 0 then Say("Posted. %d more waiting: /gms post again, or click Post on the bar.", left) end
+        end
     elseif cmd == "publish" then
         ReadGuildConfig()
         PublishConfig(true)
@@ -859,6 +931,10 @@ end
 ns.VERSION, ns.S, ns.Set, ns.Say, ns.Short, ns.NumSet = VERSION, S, Set, Say, Short, NumSet
 ns.MaxLevel, ns.Preview, ns.ReadGuildConfig, ns.RequestRoster = MaxLevel, Preview, ReadGuildConfig, RequestRoster
 ns.QUALITY_NAME = QUALITY_NAME
+ns.PostNext = PostNext
+function ns.Ready() return #ready, ready[1] end
+function ns.SkipReady() ready = {}; ShowReady() end
+function ns.ChatMode() return chatMode end
 ns.CheckMount = CheckMount
 function ns.GuildConfig() return guildCfg end
 function ns.Professions()                -- live guild professions, or the last saved ones
@@ -880,7 +956,8 @@ f:RegisterEvent("GUILD_ROSTER_UPDATE")
 f:RegisterEvent("PLAYER_LOGOUT")
 for _, ev in ipairs({ "GUILD_TRADESKILL_UPDATE", "SKILL_LINES_CHANGED", "CHAT_MSG_SKILL", "CHAT_MSG_ADDON",
                       "CHAT_MSG_LOOT", "PLAYER_DEAD", "ENCOUNTER_END", "QUEST_TURNED_IN",
-                      "ADDON_RESTRICTION_STATE_CHANGED" }) do
+                      "ADDON_RESTRICTION_STATE_CHANGED", "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER",
+                      "ADDON_ACTION_BLOCKED", "ADDON_ACTION_FORBIDDEN" }) do
     pcall(f.RegisterEvent, f, ev)       -- not every client has every event
 end
 
@@ -981,6 +1058,17 @@ f:SetScript("OnEvent", function(_, event, ...)
                 end
             end
         end
+    elseif event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_OFFICER" then
+        if not pending then return end                     -- only listening while a test line is out
+        local text, sender = ...
+        if Secret(text) or Secret(sender) then return end
+        if Short(sender) == Short(UnitName("player")) and text == pending.text then
+            pending = nil
+            chatMode = "auto"                              -- it came back: this game lets the addon post
+        end
+    elseif event == "ADDON_ACTION_BLOCKED" or event == "ADDON_ACTION_FORBIDDEN" then
+        local addon = ...
+        if addon == "GuildMilestones" and pending then NeedsClick() end
     elseif event == "ADDON_RESTRICTION_STATE_CHANGED" then
         if (outbox[1] or held[1]) and not pumping then pumping = true; After(1, Pump) end
     elseif event == "PLAYER_LOGOUT" then

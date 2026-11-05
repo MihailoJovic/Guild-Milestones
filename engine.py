@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.11.1"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
