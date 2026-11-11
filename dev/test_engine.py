@@ -381,5 +381,36 @@ check("never downgrade", not E.addon_should_update("0.12.0", "0.11.2"))
 check("same version, different files = refresh", E.addon_should_update("0.11.2*", "0.11.2"))
 check("not installed = install", E.addon_should_update(None, "0.11.2"))
 
+# ---------------------------------------------------------------- v0.11.4: Forever names ("Stronk" vs "Stronk Bmf")
+st13 = E.load_state()
+st13.update({"initialized": True, "events_seen": [],
+             "members": {"Stronk Bmf": {"level": 12, "class": "WARRIOR", "first_seen": "2026-11-04", "off": 0},
+                         "Tic Tac": {"level": 39, "class": "PRIEST", "first_seen": "2026-11-04", "off": 0}},
+             "fame": {"epicmount": {"title": "First epic mount", "who": "Stronk", "when": "2026-11-05"}},
+             "stats": {"Stronk": {"mount": 2, "bosses": 3}}})
+s13 = snap([("Stronk Bmf", 12, "WARRIOR", 0), ("Tic Tac", 39, "PRIEST", 0)],
+           events=[{"kind": "M", "name": "Stronk", "ts": 1800000000, "a": "epic", "b": "300", "c": ""},
+                   {"kind": "B", "name": "Stronk", "ts": 1800000001, "a": "Hogger", "b": "5", "c": ""}])
+st13, msgs, _ = E.process(s13, st13, cfg(), NOW)
+texts = "\n".join(m["text"] for m in msgs)
+check("a first name is matched to the full roster name", "**Stronk Bmf**" in texts, texts)
+check("so the level check catches a flight path", "mount" not in texts, texts)
+check("boss kill coloured by class", any(m["color"] == E.class_color("WARRIOR") for m in msgs), msgs)
+check("wrong epic mount removed from the Hall of Fame", "epicmount" not in st13["fame"], st13["fame"])
+check("and from the stats", not st13["stats"].get("Stronk", {}).get("mount") and not st13["stats"].get("Stronk Bmf", {}).get("mount"))
+check("other stats kept, under the full name", st13["stats"].get("Stronk Bmf", {}).get("bosses") == 4, st13["stats"])
+st14 = E.load_state()
+st14.update({"initialized": True, "events_seen": [],
+             "members": {"Stronk Bmf": {"level": 32, "class": "WARRIOR", "first_seen": "2026-11-04", "off": 0}},
+             "fame": {"epicmount": {"title": "First epic mount", "who": "Stronk", "when": "2026-11-05"}},
+             "stats": {"Stronk": {"mount": 2}}})
+st14, msgs, _ = E.process(snap([("Stronk Bmf", 32, "WARRIOR", 0)],
+                               events=[{"kind": "M", "name": "Stronk Bmf", "ts": 1800000500, "a": "epic", "b": "100", "c": ""}]),
+                          st14, cfg(), NOW)
+check("no epic mount below level 50 (the real case: level 32)", "epicmount" not in st14["fame"] and not msgs, msgs)
+check("its mount stat is cleared", st14["stats"]["Stronk Bmf"].get("mount", 0) < 2, st14["stats"])
+check("name matching", E.match_member("Tic", ["Tic Tac", "Stronk Bmf"]) == "Tic Tac" and
+      E.match_member("Tic", ["Tic Tac", "Tic Toc"]) == "Tic" and E.match_member("Zed", ["Tic Tac"]) == "Zed")
+
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

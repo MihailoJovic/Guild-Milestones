@@ -8,7 +8,7 @@ FROZEN = bool(getattr(sys, "frozen", False))              # True when running as
 APP_DIR = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))          # where bundled files (addon, icon) live
 ICON = RES_DIR / "assets" / "gm.ico"
-APP_VERSION = "0.11.3"
+APP_VERSION = "0.11.4"
 REPO, BRANCH = "MihailoJovic/Guild-Milestones", "main"
 
 # Settings and memory live in your user profile, so replacing or deleting the app never wipes them.
@@ -151,6 +151,49 @@ def parse_tips(text):
 
 def short(name):
     return name.split("-")[0]
+
+
+def match_member(who, names):
+    """WoW: Forever names are "First Surname", but older addons recorded only "First".
+    Returns the full roster name when it's clear who's meant, otherwise the name as given."""
+    if who in names:
+        return who
+    hits = [n for n in names if n.split(" ")[0] == who]
+    return hits[0] if len(hits) == 1 else who
+
+
+def tidy_names(st):
+    """Fold anything recorded under a first name into the full roster name, and drop mounts nobody can own yet
+    (v0.11.0-0.11.3 could read a flight path as an epic mount)."""
+    names = [short(n) for n in st.get("members", {})]
+    level = {short(n): r.get("level", 0) for n, r in st.get("members", {}).items()}
+    stats = st.setdefault("stats", {})
+    for key in list(stats):
+        full = match_member(key, names)
+        if full != key:
+            into = stats.setdefault(full, {})
+            for k, v in stats.pop(key).items():
+                into[k] = max(into.get(k, 0), v) if k == "mount" else into.get(k, 0) + v
+    keys = st.setdefault("keys", {})
+    for key in list(keys):
+        full = match_member(key, names)
+        if full != key:
+            keys[full] = sorted(set(keys.get(full, [])) | set(keys.pop(key)))
+    for f in st.get("fame", {}).values():
+        if f.get("who") and "," not in f["who"]:
+            f["who"] = match_member(f["who"], names)
+    for key, need in (("mount", MOUNT_MIN_LEVEL), ("epicmount", EPIC_MIN_LEVEL)):
+        f = st.get("fame", {}).get(key)
+        if f and f.get("who") and 0 < level.get(f["who"], 0) < need:
+            del st["fame"][key]
+    for who, sv in stats.items():
+        lvl = level.get(who, 0)
+        if sv.get("mount") == 2 and 0 < lvl < EPIC_MIN_LEVEL:
+            sv["mount"] = 1 if lvl >= MOUNT_MIN_LEVEL and "mount" in st.get("fame", {}) else 0
+        if sv.get("mount") and 0 < lvl < MOUNT_MIN_LEVEL:
+            sv["mount"] = 0
+        if not sv.get("mount"):
+            sv.pop("mount", None)
 
 
 def class_color(c):
@@ -464,8 +507,9 @@ def process(snap, state, cfg, now):
 
     # attunements and keys: only announce what's new since we last looked at that person
     known = st.setdefault("keys", {})
+    roster_names = [short(n) for n in st["members"]]
     for who, have in (snap.get("keys") or {}).items():
-        who = short(who)
+        who = match_member(short(who), roster_names)
         before = known.get(who)
         known[who] = sorted(set(have) | set(before or []))
         if before is None or not st["initialized"]:
@@ -482,6 +526,7 @@ def process(snap, state, cfg, now):
                              "silent": True})
 
     st["lfg"] = [x for x in snap.get("lfg", []) if snap.get("updated", 0) - x["ts"] < LFG_FRESH]
+    tidy_names(st)
 
     msgs.extend(event_items(snap.get("events", []), st, cfg, cls_of))
 
@@ -493,6 +538,7 @@ def process(snap, state, cfg, now):
 QUALITY_COLORS = {0: 0x9D9D9D, 1: 0xFFFFFF, 2: 0x1EFF00, 3: 0x0070DD, 4: 0xA335EE, 5: 0xFF8000}
 QUALITY_NAMES = {0: "Poor", 1: "Common", 2: "Uncommon", 3: "Rare", 4: "Epic", 5: "Legendary"}
 MOUNT_MIN_LEVEL = 30      # below this a "mount" is a misread (Vanilla mounts start at 40)
+EPIC_MIN_LEVEL = 50       # below this an "epic mount" is a misread (Vanilla epic mounts need 60)
 BOSS_WINDOW = 15 * 60     # reports of the same boss within this many seconds are one kill
 _ITEM_CACHE = {}
 
@@ -526,6 +572,7 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         st["events_seen"] = keys[-500:]
         return []
     seen_set, items, looked = set(seen), [], 0
+    names = [short(n) for n in st.get("members", {})]
     min_q = int(cfg.get("loot_min_quality", 3))
     kills = {}                                             # boss -> everyone the addon heard killing it
     wk = st.setdefault("week", {})                         # weekly leaderboard counts
@@ -537,7 +584,8 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
         if key in seen_set:
             continue
         seen_set.add(key)
-        who, color = short(ev["name"]), class_color(cls_of.get(short(ev["name"]).lower()))
+        who = match_member(short(ev["name"]), names)
+        color = class_color(cls_of.get(who.lower()))
         kind = ev["kind"]
         when = datetime.fromtimestamp(ev["ts"]).strftime("%Y-%m-%d") if ev["ts"] > 0 else ""
         if kind == "I":
@@ -568,9 +616,9 @@ def event_items(events, st, cfg, cls_of, lookup=item_lookup):
             del fallen[:-50]
         elif kind == "M":                                  # mounts: a = "mount" (normal) or "epic"
             lvl = next((r.get("level", 0) for n, r in st.get("members", {}).items() if short(n) == who), 0)
-            if lvl and lvl < MOUNT_MIN_LEVEL:
-                continue                                   # nobody this low owns a mount: it was a flight path
             epic = ev["a"] == "epic"
+            if lvl and lvl < (EPIC_MIN_LEVEL if epic else MOUNT_MIN_LEVEL):
+                continue                                   # too low to own that mount: it was a flight path
             have = st.get("stats", {}).get(who, {}).get("mount", 0)
             if (2 if epic else 1) <= have:
                 continue                                   # already celebrated

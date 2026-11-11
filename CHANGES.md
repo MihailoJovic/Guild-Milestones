@@ -1,5 +1,13 @@
 # What's new
 
+## v0.11.4
+**Guildmates' announcements are now read from guild chat, and Forever names match up.**
+- Your addon now also reads guildmates' announcement lines in guild chat (level-ups, bosses, loot, mounts, deaths), so news reaches Discord even when the game blocks the hidden addon channel, which it does in dungeons.
+- WoW: Forever names are "First Surname". The addon only knew your first name, so your own news was stored twice and the app couldn't match it to the roster. Fixed: everything now uses your full guild name.
+- That mix-up let a flight path count as an epic mount. It's removed from the Hall of Fame, and nobody under level 50 gets an epic mount post.
+- The "can the addon post to guild chat by itself?" check now recognises your own lines, so the Post bar only shows up when it's really needed.
+- New /gms debug: shows what the addon sent and received this session, to help track down anything missing.
+
 ## v0.11.3
 **Flight paths no longer count as an epic mount, and the boards only show your current guild.**
 - Taking a flight path (like the hippogryph to Darkshore) was mistaken for an epic mount. Fixed: flight paths are ignored, a mount has to be seen twice in a row, and nobody under level 30 gets a mount post. The wrong one is forgotten, so it never reaches Discord.

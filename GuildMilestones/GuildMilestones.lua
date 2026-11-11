@@ -1,4 +1,4 @@
--- Guild Milestones 0.11.3
+-- Guild Milestones 0.11.4
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.11.3"
+local VERSION = "0.11.4"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -77,6 +77,44 @@ local function Say(...) print(TAG .. string.format(...)) end
 
 local function Short(name)
     return (tostring(name or ""):match("^([^%-]+)")) or ""
+end
+
+-- Who am I, as the guild sees me? On WoW: Forever names are "First Surname", but UnitName("player")
+-- gives only "First". The roster (and chat senders) use the full name, so find it there by GUID.
+local myFull
+local function Me()
+    if myFull then return myFull end
+    local first = UnitName("player")
+    local guid = UnitGUID and UnitGUID("player")
+    local n = (IsInGuild() and GetNumGuildMembers and GetNumGuildMembers()) or 0
+    local byFirst, count = nil, 0
+    for i = 1, n do
+        local ok, name, g = pcall(function() local r = { GetGuildRosterInfo(i) }; return r[1], r[17] end)
+        if ok and name then
+            local s = Short(name)
+            if (guid and g == guid) or s == first then myFull = s; return s end
+            if s:match("^(%S+)") == first then byFirst = s; count = count + 1 end
+        end
+    end
+    if count == 1 then myFull = byFirst; return byFirst end     -- one "Stronk Something" in the guild: that's me
+    return first
+end
+
+local function IsMe(name)
+    local s = Short(name)
+    return s == Me() or s == UnitName("player")
+end
+
+-- A small log of what arrives on the hidden channel and from guild chat, saved for troubleshooting (/gms debug).
+local function Diag(field, line)
+    local db = GuildMilestonesDB
+    db.diag = db.diag or { log = {} }
+    if field then db.diag[field] = (db.diag[field] or 0) + 1 end
+    if line then
+        local log = db.diag.log
+        log[#log + 1] = date("%H:%M:%S") .. " " .. line
+        while #log > 40 do table.remove(log, 1) end
+    end
 end
 
 local function NumSet(str)
@@ -189,13 +227,20 @@ local function ChatLocked()
 end
 
 local function SendHidden(payload)
-    return pcall(function()
+    local ok, res = pcall(function()
         if C_ChatInfo and C_ChatInfo.SendAddonMessage then
-            C_ChatInfo.SendAddonMessage(PREFIX, payload, "GUILD")
+            return C_ChatInfo.SendAddonMessage(PREFIX, payload, "GUILD")
         elseif SendAddonMessage then
-            SendAddonMessage(PREFIX, payload, "GUILD")
+            return SendAddonMessage(PREFIX, payload, "GUILD")
         end
     end)
+    -- newer clients answer with a result code (0 = sent), older ones with true/nothing
+    if not ok or res == false or (type(res) == "number" and res ~= 0) then
+        Diag("sendFailed", "couldn't send " .. tostring(payload):sub(1, 30) .. " (" .. tostring(ok and res or "error") .. ")")
+    else
+        Diag("sent")
+    end
+    return ok
 end
 
 local function FlushHeld()
@@ -315,9 +360,9 @@ local function Moment(kind, who, a, b, c)
 end
 
 local function Announce(kind, a, b, text)
-    Moment(kind, UnitName("player"), a, b)
+    Moment(kind, Me(), a, b)
     if not S("shout") or not IsInGuild() then return end
-    local me = UnitName("player")
+    local me = Me()
     Shout(text)
     if kind == "L" then Tell("L|" .. me .. "|" .. a) else Tell("S|" .. me .. "|" .. a .. "|" .. b) end
     if S("snapshot") then Record(kind, me, a, b) end
@@ -356,14 +401,29 @@ end
 local function RecordEvent(row)
     local db = GuildMilestonesDB
     db.events = db.events or {}
+    for i = #db.events, math.max(1, #db.events - 50), -1 do       -- the exact same row twice = one event
+        if db.events[i] == row then return false end
+    end
     db.events[#db.events + 1] = row
     while #db.events > 200 do table.remove(db.events, 1) end
+    return true
+end
+
+-- The same news can arrive twice: on the hidden channel and as a guild chat line. Keep one.
+local recent = { hidden = {}, chat = {} }
+local function SeenRecently(route, kind, who, a)
+    local key = kind .. "|" .. (tostring(who):match("^(%S+)") or ""):lower() .. "|" .. tostring(a or ""):lower()
+    local other = route == "chat" and recent.hidden or recent.chat
+    local now = time()
+    local dup = (other[key] and now - other[key] < 120) or (route == "chat" and recent.chat[key] and now - recent.chat[key] < 10)
+    recent[route][key] = now
+    return dup
 end
 
 local function Event(kind, a, b, c)
     if not IsInGuild() then return end
     local function clean(v) return (tostring(v or ""):gsub("|", "/")) end
-    local row = table.concat({ kind, UnitName("player"), time(), clean(a), clean(b), clean(c) }, "|")
+    local row = table.concat({ kind, Me(), time(), clean(a), clean(b), clean(c) }, "|")
     if S("snapshot") then RecordEvent(row) end
     Tell("E|" .. row)
 end
@@ -475,8 +535,9 @@ local function CheckMount()
     if pct > 150 then return reset() end                                -- faster than any ground mount: not a mount
     local tier = (pct >= 90 and 2) or (pct >= 50 and 1) or 0
     if tier == 0 then return reset() end
+    if tier == 2 and (UnitLevel("player") or 0) < 50 then return reset() end   -- epic mounts need 60 in Vanilla
     if seenTier ~= tier then seenTier = tier; return end                -- wait for a second reading
-    local me = UnitName("player")
+    local me = Me()
     local db = GuildMilestonesDB
     db.mounts = db.mounts or {}
     if (db.mounts[me] or 0) >= tier then return end
@@ -544,7 +605,7 @@ local function CheckKeys(announce)
     end
     local now = table.concat(have, ",")
     if now == myKeys then return end
-    local me = UnitName("player")
+    local me = Me()
     if announce and myKeys then
         local old = {}
         for c in myKeys:gmatch("[^,]+") do old[c] = true end
@@ -563,7 +624,7 @@ ns.CheckKeys = CheckKeys
 local LFG_TTL = 90 * 60
 
 function ns.SetLFG(role, wants)
-    local me, db = UnitName("player"), GuildMilestonesDB
+    local me, db = Me(), GuildMilestonesDB
     if not role or #wants == 0 then
         db.myLfg = nil
         StoreRow("lfg", me, nil)
@@ -757,7 +818,7 @@ local function Scan(force)
     if ok and #profs > 0 then db.profs = profs end
     db.entries = nil                        -- old format from version 0.1
     db.updated = time()
-    db.scanner = UnitName("player")
+    db.scanner = Me()
     db.addon = VERSION
     local okG, gname = pcall(function() return GetGuildInfo and GetGuildInfo("player") end)
     db.guild = (okG and type(gname) == "string" and not Secret(gname)) and gname or nil
@@ -927,6 +988,12 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
     elseif cmd == "save" or cmd == "flush" then
         Scan(true)            -- ReloadUI() is blocked for addons on WoW: Forever, so the player reloads
         Say("Snapshot ready. Now type /reload so the game writes it to disk for the app.")
+    elseif cmd == "debug" then
+        local d = GuildMilestonesDB.diag or {}
+        Say("since %s: you are '%s'. Hidden channel: sent %d, failed %d, got %d from you, %d from guildmates, %d hidden by the game. Read from guild chat: %d.",
+            tostring(d.since or "login"), Me(), d.sent or 0, d.sendFailed or 0, d.inMine or 0, d.inOthers or 0,
+            d.secretDropped or 0, d.chatParsed or 0)
+        for i = math.max(1, #(d.log or {}) - 9), #(d.log or {}) do print("  " .. d.log[i]) end
     elseif cmd == "scan" then
         RequestRoster()
         Say("asked the game for a fresh roster.")
@@ -947,6 +1014,74 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
         Help()
     end
 end
+
+-- ------------------------------------------- guildmates' lines in guild chat
+-- The hidden channel can be blocked or hidden by the game (in dungeons, for example), but the guild chat
+-- line a guildmate's addon posts is right there in chat. Read those lines too, so nothing is missed.
+local CHAT_KINDS = {                               -- default wording -> what it means
+    { key = "maxMsg", kind = "L" }, { key = "levelMsg", kind = "L" }, { key = "tierMsg", kind = "S" },
+    { key = "bossMsg", kind = "B" }, { key = "deathMsg", kind = "D" }, { key = "questMsg", kind = "Q" },
+    { key = "epicMountMsg", kind = "M", a = "epic" }, { key = "mountMsg", kind = "M", a = "mount" },
+    { key = "lootMsg", kind = "I" },
+}
+local chatPatterns
+
+local function TemplatePattern(tmpl)
+    local names = {}
+    local pat = tmpl:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1")
+    pat = pat:gsub("{(%w+)}", function(k) names[#names + 1] = k; return "(.-)" end)
+    return "^" .. pat, names
+end
+
+local function ChatPatterns()
+    if chatPatterns then return chatPatterns end
+    chatPatterns = {}
+    for _, c in ipairs(CHAT_KINDS) do
+        local pat, names = TemplatePattern(DEFAULTS[c.key])
+        if c.key ~= "lootMsg" then pat = pat .. "$" end          -- loot lines end with " (Rare, ilvl 30)"
+        chatPatterns[#chatPatterns + 1] = { pat = pat, names = names, kind = c.kind, a = c.a }
+    end
+    return chatPatterns
+end
+
+local function OnGuildLine(text, sender)
+    if not S("snapshot") or IsMe(sender) then return end
+    local who = Short(sender)
+    for _, p in ipairs(ChatPatterns()) do
+        local caps = { tostring(text):match(p.pat) }
+        if caps[1] then
+            local v = {}
+            for i, k in ipairs(p.names) do v[k] = caps[i] end
+            local kind = p.kind
+            if kind == "L" then
+                local lvl = tonumber(v.level)
+                if lvl and not SeenRecently("chat", "L", who, lvl) then Record("L", who, lvl); Moment("L", who, lvl) end
+            elseif kind == "S" then
+                local tier = tonumber(tostring(v.tier):match("(%d+)%)?$"))
+                if tier and v.prof and not SeenRecently("chat", "S", who, v.prof) then
+                    Record("S", who, v.prof, tier); Moment("S", who, v.prof, tier)
+                end
+            else
+                local a, b, c = p.a or v.boss or v.zone or v.quest or "", "", ""
+                if kind == "I" then
+                    local link = tostring(v.item)
+                    local id = link:match("|Hitem:(%d+)")
+                    local q = ItemQuality(link)
+                    if not id or not q then return end
+                    a, b, c = id, q .. ":0", link:match("%[(.-)%]") or ""
+                end
+                if not SeenRecently("chat", kind, who, a) then
+                    local clean = function(x) return (tostring(x):gsub("|", "/")) end
+                    local row = table.concat({ kind, who, time(), clean(a), clean(b), clean(c) }, "|")
+                    if RecordEvent(row) then Moment(kind, who, a, b, c) end
+                end
+            end
+            Diag("chatParsed", "chat " .. kind .. " from " .. who)
+            return
+        end
+    end
+end
+ns.OnGuildLine = OnGuildLine
 
 -- ------------------------------------------------- shared with the window (UI.lua)
 ns.VERSION, ns.S, ns.Set, ns.Say, ns.Short, ns.NumSet = VERSION, S, Set, Say, Short, NumSet
@@ -987,6 +1122,7 @@ f:SetScript("OnEvent", function(_, event, ...)
         GuildMilestonesDB = GuildMilestonesDB or {}
         GuildMilestonesDB.settings = GuildMilestonesDB.settings or {}
         pcall(ForgetFlightMounts)
+        GuildMilestonesDB.diag = { log = {}, since = date("%b %d %H:%M") }   -- a fresh troubleshooting log each session
         pcall(function()
             if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
                 C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
@@ -1044,13 +1180,20 @@ f:SetScript("OnEvent", function(_, event, ...)
         SkillsChanged()
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, channel, sender = ...
-        if Secret(prefix) or Secret(text) or Secret(sender) then return end
-        local ver = prefix == PREFIX and tostring(text):match("^V|(%d+%.%d+%.?%d*)$")
-        if ver then
-            if Short(sender) ~= Short(UnitName("player")) then OnVersion(ver, sender) end
+        if Secret(prefix) or Secret(text) or Secret(sender) then
+            Diag("secretDropped", "hidden message dropped: the game hid it (secret value)")
             return
         end
-        local mine = Short(sender) == Short(UnitName("player"))
+        if prefix == PREFIX then
+            Diag(IsMe(sender) and "inMine" or "inOthers",
+                 (IsMe(sender) and "" or ("from " .. Short(sender) .. " ")) .. tostring(channel) .. " " .. tostring(text):sub(1, 40))
+        end
+        local ver = prefix == PREFIX and tostring(text):match("^V|(%d+%.%d+%.?%d*)$")
+        if ver then
+            if not IsMe(sender) then OnVersion(ver, sender) end
+            return
+        end
+        local mine = IsMe(sender)
         if prefix == PREFIX and channel == "GUILD" and not mine then
             local kw, kl = tostring(text):match("^K|([^|]+)|([%a,]*)$")          -- a guildmate's attunements
             if kw then StoreRow("keys", kw, kw .. "|" .. kl .. "|" .. time()); return end
@@ -1065,26 +1208,29 @@ f:SetScript("OnEvent", function(_, event, ...)
             local who, lvl = tostring(text):match("^L|([^|]+)|(%d+)$")
             if row then
                 local k, w, _, a, b, c = row:match("^(%a)|([^|]+)|(%d+)|([^|]*)|([^|]*)|?(.*)$")
-                if k then
+                if k and not SeenRecently("hidden", k, w, a) then
                     if keep then RecordEvent(row) end
                     Moment(k, w, a, b, c)
                 end
             elseif who then
-                if keep then Record("L", who, lvl) end
-                Moment("L", who, tonumber(lvl))
+                if not SeenRecently("hidden", "L", who, lvl) then
+                    if keep then Record("L", who, lvl) end
+                    Moment("L", who, tonumber(lvl))
+                end
             else
                 local w, prof, tier = tostring(text):match("^S|([^|]+)|([^|]+)|(%d+)$")
-                if w then
+                if w and not SeenRecently("hidden", "S", w, prof) then
                     if keep then Record("S", w, prof, tier) end
                     Moment("S", w, prof, tonumber(tier))
                 end
             end
         end
     elseif event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_OFFICER" then
-        if not pending then return end                     -- only listening while a test line is out
         local text, sender = ...
         if Secret(text) or Secret(sender) then return end
-        if Short(sender) == Short(UnitName("player")) and text == pending.text then
+        if event == "CHAT_MSG_GUILD" then pcall(OnGuildLine, text, sender) end
+        if not pending then return end                     -- the echo test below only runs while a test line is out
+        if IsMe(sender) and text == pending.text then
             pending = nil
             chatMode = "auto"                              -- it came back: this game lets the addon post
         end
