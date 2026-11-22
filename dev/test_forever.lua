@@ -67,6 +67,35 @@ W.fire("CHAT_MSG_GUILD", "anyone up for Deadmines?", "Tic Tac")
 W.fire("CHAT_MSG_GUILD", "Stronk and friends defeated Relic Guardian!", "Stronk Bmf")
 check("normal chat and my own lines are ignored", #GuildMilestonesDB.events == n)
 
+-- v0.11.5: crafting materials stay out of guild chat by default, and /gms ignore
+local classOf = { [7076] = 7, [12808] = 7, [12361] = 3, [9446] = 2 }      -- Essence of Earth, Essence of Undeath, Blue Sapphire, a sword
+function GetItemInfoInstant(link)
+    local id = tonumber(tostring(link):match("|Hitem:(%d+)"))
+    return id, "", "", "", 0, classOf[id] or 4, 0
+end
+local function blue(id, name) return "|cnIQ3:|Hitem:" .. id .. "::::::::40:::::|h[" .. name .. "]|h|r" end
+local function loot(id, name)
+    W.clear(); GuildMilestonesDB.events = nil
+    W.fire("CHAT_MSG_LOOT", "You receive loot: " .. blue(id, name) .. "."); W.run()
+    return W.chat[1] and W.chat[1].text
+end
+check("blue crafting material not announced", loot(7076, "Essence of Earth") == nil, W.chat[1] and W.chat[1].text)
+check("but still recorded for Discord", GuildMilestonesDB.events and GuildMilestonesDB.events[1]:match("^I|Stronk Bmf|%d+|7076|3:"))
+check("blue gem not announced either", loot(12361, "Blue Sapphire") == nil)
+check("blue gear still announced", loot(9446, "Electrocutioner Leg") and W.chat[1].text:find("Electrocutioner Leg", 1, true))
+GuildMilestonesDB.settings.lootMats = true
+check("materials back on when you want them", loot(12808, "Essence of Undeath") ~= nil)
+GuildMilestonesDB.settings.lootMats = nil
+
+W.clear(); SlashCmdList["GUILDMILESTONES"]("ignore " .. blue(9446, "Electrocutioner Leg"))
+check("ignore confirms", W.printed("Electrocutioner Leg won't be announced"), W.out[1])
+check("ignored item stays quiet", loot(9446, "Electrocutioner Leg") == nil)
+W.clear(); SlashCmdList["GUILDMILESTONES"]("ignore")
+check("ignore list shows it", W.printed("Never announced: Electrocutioner Leg"), W.out[1])
+W.clear(); SlashCmdList["GUILDMILESTONES"]("unignore 9446")
+check("unignore by number", W.printed("will be announced again"), W.out[1])
+check("announced again", loot(9446, "Electrocutioner Leg") ~= nil)
+
 -- the troubleshooting log
 W.clear(); SlashCmdList["GUILDMILESTONES"]("debug")
 check("/gms debug shows who I am and what arrived", W.printed("you are 'Stronk Bmf'") and W.printed("Read from guild chat: 5"), W.out[1])

@@ -1,4 +1,4 @@
--- Guild Milestones 0.11.4
+-- Guild Milestones 0.11.5
 --
 -- What it does (nothing to set up, just play):
 --   * Announces YOUR OWN milestones in guild chat the moment they happen: level milestones,
@@ -15,7 +15,7 @@ ns = ns or {}                         -- shared with UI.lua
 
 GuildMilestonesDB = GuildMilestonesDB or {}
 
-local VERSION = "0.11.4"
+local VERSION = "0.11.5"
 local PREFIX = "GMS1"                 -- hidden addon channel: lets other copies log what was announced
 local TAG = "|cfff2b84bGuild Milestones|r "
 local SCAN_INTERVAL = 60              -- seconds between roster requests
@@ -34,6 +34,7 @@ local DEFAULTS = {
     toasts = true,                    -- small pop-ups when a guildmate hits a milestone
     minimap = true,                   -- the GM button by the minimap
     mounts = true,                    -- announce my first mount and epic mount
+    lootMats = false,                 -- announce crafting materials (ore, cloth, gems...) too
     mountMsg = "{name} just got their first mount! No more walking.",
     epicMountMsg = "{name} is now riding an epic mount!",
     lvlMode = "guild",                -- guild = the guild's milestone levels, every = each level, off
@@ -462,6 +463,26 @@ local function LootPatterns()
 end
 local lootPatterns
 
+-- Crafting materials: ore, cloth, herbs, gems, elemental drops... The game's item classes say so:
+-- 3 = gem, 5 = reagent, 7 = trade goods.
+local MATERIAL_CLASSES = { [3] = true, [5] = true, [7] = true }
+
+local function IsMaterial(link)
+    local ok, classID = pcall(function()
+        local info = (C_Item and C_Item.GetItemInfoInstant) or GetItemInfoInstant
+        if not info then return nil end
+        local _, _, _, _, _, class = info(link)
+        return class
+    end)
+    return ok and MATERIAL_CLASSES[tonumber(classID) or -1] or false
+end
+
+-- Items you never want announced (/gms ignore <shift-click an item>).
+local function IsIgnored(id)
+    local list = GuildMilestonesDB.ignoreItems
+    return list and id and list[tonumber(id)] ~= nil or false
+end
+
 local function OnLoot(text)
     local minQ = tonumber(S("lootMin")) or -1
     if minQ < 0 or type(text) ~= "string" or Secret(text) then return end
@@ -481,7 +502,9 @@ local function OnLoot(text)
     ilvl = ok and tonumber(ilvl) or nil
     if ilvl and ilvl > 1 then detail = detail .. ", ilvl " .. ilvl else ilvl = nil end
     local id = link:match("|Hitem:(%d+)")
-    Event("I", id, q .. ":" .. (ilvl or 0), (ok and itemName) or link:match("%[(.-)%]"))
+    Event("I", id, q .. ":" .. (ilvl or 0), (ok and itemName) or link:match("%[(.-)%]"))   -- Discord still gets it
+    if IsIgnored(id) then return end                              -- on your /gms ignore list
+    if not S("lootMats") and IsMaterial(link) then return end     -- crafting materials stay out of guild chat
     Chat(Fill(S("lootMsg"), { name = UnitName("player"), item = link }) .. " (" .. detail .. ")", true)
 end
 
@@ -929,6 +952,7 @@ local function Help()
     print("  /gms guild          which milestones your guild chose")
     print("  /gms publish        (officers) put the app's milestone settings into Guild Info")
     print("  /gms crafters <p>   who in the guild crafts a profession")
+    print("  /gms ignore <item>  never announce that item (shift-click it in). /gms ignore lists them")
     print("  /gms week           this week's guild summary (needs the companion app)")
     print("  /gms save           get the guild snapshot ready (then type /reload)")
     print("  Snapshot: " .. (db.members and #db.members or 0) .. " members, last "
@@ -988,6 +1012,25 @@ SlashCmdList["GUILDMILESTONES"] = function(msg)
     elseif cmd == "save" or cmd == "flush" then
         Scan(true)            -- ReloadUI() is blocked for addons on WoW: Forever, so the player reloads
         Say("Snapshot ready. Now type /reload so the game writes it to disk for the app.")
+    elseif cmd == "ignore" or cmd == "unignore" then
+        local db = GuildMilestonesDB
+        db.ignoreItems = db.ignoreItems or {}
+        local id = tonumber(rest:match("|Hitem:(%d+)") or rest:match("^(%d+)$"))
+        local name = rest:match("%[(.-)%]")
+        if not id then
+            local names = {}
+            for _, n in pairs(db.ignoreItems) do names[#names + 1] = n end
+            table.sort(names)
+            Say("Never announced: %s", #names > 0 and table.concat(names, ", ") or "nothing yet")
+            print("  /gms ignore <shift-click an item> to add one, /gms unignore <item> to take it off.")
+        elseif cmd == "ignore" then
+            db.ignoreItems[id] = name or db.ignoreItems[id] or ("item " .. id)
+            Say("%s won't be announced in guild chat any more. /gms unignore to undo.", db.ignoreItems[id])
+        else
+            local was = db.ignoreItems[id]
+            db.ignoreItems[id] = nil
+            Say(was and "%s will be announced again." or "That item wasn't on your ignore list.", tostring(was or ""))
+        end
     elseif cmd == "debug" then
         local d = GuildMilestonesDB.diag or {}
         Say("since %s: you are '%s'. Hidden channel: sent %d, failed %d, got %d from you, %d from guildmates, %d hidden by the game. Read from guild chat: %d.",

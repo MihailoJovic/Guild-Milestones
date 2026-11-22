@@ -593,6 +593,7 @@ local SETTINGS = {
     { key = "lootMin", label = "Loot", tip = "Announce items you loot from this quality up.",
       options = { { -1, "Off" }, { 0, "Everything" }, { 2, "Green or better" }, { 3, "Blue or better" },
                   { 4, "Purple or better" }, { 5, "Legendary only" } } },
+    { key = "lootMats", label = "Crafting materials", tip = "Ore, cloth, herbs, gems and other crafting materials. Off = they're never announced in guild chat, whatever their colour. To silence one particular item: /gms ignore and shift-click it.", options = ON_OFF },
     { key = "bosses", label = "Boss kills", tip = "Dungeon and raid bosses. Only the group leader says it, so it's said once.", options = ON_OFF },
     { key = "deaths", label = "Deaths", tip = "Share your deaths (for the weekly Darwin Award). Off unless you want the fame.", options = ON_OFF },
     { key = "quests", label = "Quest turn-ins", tip = "Every quest you hand in. Can get chatty.", options = ON_OFF },
@@ -702,7 +703,7 @@ end
 -- ---------------------------------------------------- the frame itself
 local function BuildWindow()
     win = Box(UIParent, C.bg)
-    win:SetSize(700, 530)
+    win:SetSize(700, 556)
     win:SetPoint("CENTER")
     win:SetFrameStrata("HIGH")
     win:SetMovable(true)

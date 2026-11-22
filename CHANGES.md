@@ -1,5 +1,11 @@
 # What's new
 
+## v0.11.5
+**Crafting materials are no longer announced in guild chat, and you can silence any item.**
+- Blue (or better) ore, cloth, herbs, gems and other crafting materials stay out of guild chat by default. Want them back? /gms → Settings → Crafting materials → On.
+- New /gms ignore: shift-click an item after it, and that item is never announced again. /gms ignore on its own lists them, /gms unignore takes one off.
+- Discord still gets everything, as before.
+
 ## v0.11.4
 **Guildmates' announcements are now read from guild chat, and Forever names match up.**
 - Your addon now also reads guildmates' announcement lines in guild chat (level-ups, bosses, loot, mounts, deaths), so news reaches Discord even when the game blocks the hidden addon channel, which it does in dungeons.
